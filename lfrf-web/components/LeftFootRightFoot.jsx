@@ -329,7 +329,7 @@ ${goal}
       const aResult = await callClaude(
         SYSTEM_A_INITIAL(firstPrinciple),
         question,
-        { role: 'main', maxTokens: 4000 }
+        { role: 'main', maxTokens: 2500 }
       );
       const newRounds = [{ role: 'A', content: aResult.text, version: 'v1', round: 1, model: aResult.modelName }];
       setRounds([...newRounds]);
@@ -386,7 +386,7 @@ ${goal}
       const aResult = await callClaude(
         SYSTEM_A_REVISE(firstPrinciple),
         `用户的原始问题：\n${question}\n\n讨论历史：\n${historyForA}\n\n请输出你的修订版答案。新答案必须比上版更好地达成第一性目标。`,
-        { role: 'main', maxTokens: 4000 }
+        { role: 'main', maxTokens: 2500 }
       );
       const version = `v${currentRounds.filter(r => r.role === 'A').length + 1}`;
       currentRounds.push({ role: 'A', content: aResult.text, version, round: nextRoundNum, model: aResult.modelName });
@@ -442,7 +442,7 @@ ${firstPrinciple}
 
 风格：深入、有判断力，不必刻意短。`,
         `用户原始问题：\n${question}\n\n完整讨论历史：\n${history}\n\n请输出最终收敛答案。`,
-        { role: 'synthesizer', maxTokens: 3000 }
+        { role: 'synthesizer', maxTokens: 1500 }
       );
       setRounds([...rounds, { role: 'FINAL', content: finalResult.text, model: finalResult.modelName }]);
       setStage('done');
