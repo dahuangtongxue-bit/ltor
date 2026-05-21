@@ -26,7 +26,6 @@ function checkRateLimit(ip) {
   return { ok: true, remaining: DAILY_LIMIT - record.count };
 }
 
-// 根据 role 选 provider：critic 走 B，其他（main / synthesizer / goal）走 A
 function getProviderConfig(role) {
   if (role === 'critic') {
     return {
@@ -75,7 +74,7 @@ export async function POST(req) {
     }
 
     const endpoint = provider.baseUrl.replace(/\/+$/, '') + '/chat/completions';
-    // 构建请求体
+
     const requestBody = {
       model: provider.model,
       max_tokens: maxTokens || 1500,
@@ -85,13 +84,8 @@ export async function POST(req) {
       ],
     };
 
-    // 可选：禁用 thinking 模式（DeepSeek V4 Pro / GLM-5.1 等推理模型默认开启 thinking）
-    // 在环境变量 PROVIDER_X_DISABLE_THINKING=true 时启用
     const disableThinkingKey = `PROVIDER_${provider.label}_DISABLE_THINKING`;
     if (process.env[disableThinkingKey] === 'true') {
-      // 智谱 GLM 格式：thinking: { type: 'disabled' }
-      // DeepSeek V4 格式：thinking: { type: 'disabled' } 或 enable_thinking: false
-      // 两个都加上，兼容两家
       requestBody.thinking = { type: 'disabled' };
       requestBody.enable_thinking = false;
     }
@@ -120,17 +114,11 @@ export async function POST(req) {
     }
 
     const data = await upstream.json();
-    const message = data.choices?.[0]?.message;
+    const message_obj = data.choices?.[0]?.message;
 
-    // 兼容多种字段：
-    // - 标准 OpenAI 格式：content
-    // - DeepSeek thinking 模式：可能在 reasoning_content（思考过程）和 content（最终回答）
-    // - 智谱 GLM thinking：有些版本可能也用 reasoning_content
-    // 如果 content 为空但 reasoning_content 有，说明模型只输出了思考过程没出最终答案（max_tokens 不够）
-    let text = message?.content || '';
-    const reasoningContent = message?.reasoning_content || '';
+    let text = message_obj?.content || '';
+    const reasoningContent = message_obj?.reasoning_content || '';
 
-    // 如果 content 空但 reasoning 有，说明 max_tokens 被思考过程耗尽了，给用户一个明确的错误
     if (!text && reasoningContent) {
       return Response.json({
         error: {
@@ -144,13 +132,12 @@ export async function POST(req) {
     }
 
     if (!text) {
-      // 详细诊断信息
       const finishReason = data.choices?.[0]?.finish_reason;
       const debug = {
         finishReason,
-        hasContent: 'content' in (message || {}),
-        contentType: typeof message?.content,
-        messageKeys: message ? Object.keys(message) : [],
+        hasContent: 'content' in (message_obj || {}),
+        contentType: typeof message_obj?.content,
+        messageKeys: message_obj ? Object.keys(message_obj) : [],
         firstChoice: data.choices?.[0],
       };
       return Response.json({
@@ -181,7 +168,6 @@ export async function POST(req) {
   }
 }
 
-// 公开两个 provider 的显示名，前端展示用
 export async function GET() {
   return Response.json({
     providerA: process.env.PROVIDER_A_DISPLAY_NAME || 'Provider A',
