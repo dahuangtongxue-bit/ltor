@@ -26,7 +26,6 @@ function checkRateLimit(ip) {
   return { ok: true, remaining: DAILY_LIMIT - record.count };
 }
 
-// 根据 role 选 provider：critic 走 B，其他（main / synthesizer / goal）走 A
 function getProviderConfig(role) {
   if (role === 'critic') {
     return {
@@ -75,20 +74,29 @@ export async function POST(req) {
     }
 
     const endpoint = provider.baseUrl.replace(/\/+$/, '') + '/chat/completions';
+
+    const requestBody = {
+      model: provider.model,
+      max_tokens: maxTokens || 1500,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: message },
+      ],
+    };
+
+    const disableThinkingKey = `PROVIDER_${provider.label}_DISABLE_THINKING`;
+    if (process.env[disableThinkingKey] === 'true') {
+      requestBody.thinking = { type: 'disabled' };
+      requestBody.enable_thinking = false;
+    }
+
     const upstream = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${provider.apiKey}`,
       },
-      body: JSON.stringify({
-        model: provider.model,
-        max_tokens: maxTokens || 1500,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: message },
-        ],
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!upstream.ok) {
@@ -106,10 +114,39 @@ export async function POST(req) {
     }
 
     const data = await upstream.json();
-    const text = data.choices?.[0]?.message?.content || '';
-    if (!text) {
+    const message_obj = data.choices?.[0]?.message;
+
+    let text = message_obj?.content || '';
+    const reasoningContent = message_obj?.reasoning_content || '';
+
+    if (!text && reasoningContent) {
       return Response.json({
-        error: { type: 'empty_response', message: `${provider.label} 返回了空响应` }
+        error: {
+          type: 'thinking_overflow',
+          message: `${provider.label} 的思考过程占满了 max_tokens 但没输出最终答案。模型 "${provider.model}" 可能是 thinking 模式模型，需要更大的 max_tokens 或换成非 thinking 版本。`,
+          providerLabel: provider.label,
+          finishReason: data.choices?.[0]?.finish_reason,
+          reasoningPreview: reasoningContent.slice(0, 200) + '...',
+        }
+      }, { status: 502 });
+    }
+
+    if (!text) {
+      const finishReason = data.choices?.[0]?.finish_reason;
+      const debug = {
+        finishReason,
+        hasContent: 'content' in (message_obj || {}),
+        contentType: typeof message_obj?.content,
+        messageKeys: message_obj ? Object.keys(message_obj) : [],
+        firstChoice: data.choices?.[0],
+      };
+      return Response.json({
+        error: {
+          type: 'empty_response',
+          message: `${provider.label}（${provider.model}）返回了空响应。finish_reason=${finishReason || 'unknown'}。可能原因：模型不支持当前调用方式，或返回结构非标准 OpenAI 格式。`,
+          providerLabel: provider.label,
+          debug,
+        }
       }, { status: 502 });
     }
 
@@ -131,7 +168,6 @@ export async function POST(req) {
   }
 }
 
-// 公开两个 provider 的显示名，前端展示用
 export async function GET() {
   return Response.json({
     providerA: process.env.PROVIDER_A_DISPLAY_NAME || 'Provider A',
