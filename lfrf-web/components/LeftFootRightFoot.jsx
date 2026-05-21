@@ -374,18 +374,28 @@ ${goal}
 
       const nextRoundNum = currentRounds[currentRounds.length - 1].round + 1;
 
-      // 拼接历史给 A
-      const historyForA = currentRounds.map(r => {
-        if (r.role === 'A') return `[A 的 ${r.version} 答案]\n${r.content}`;
-        if (r.role === 'B') return `[B 的审查批评]\n${r.content}`;
-        if (r.role === 'JUDGE') return `[用户裁判介入]\n${r.content}`;
-        return '';
-      }).join('\n\n---\n\n');
+      // 拼接历史给 A —— 只传最近的关键节点（避免轮次增加导致 token 暴涨）
+      // 修订所需的最小上下文：上一版 A 答案 + 上一次 B 批评 + 用户最新裁判意见
+      const buildRecentHistoryForA = () => {
+        // 找出最近一条 A 答案
+        const lastA = [...currentRounds].reverse().find(r => r.role === 'A');
+        // 找出最近一条 B 批评
+        const lastB = [...currentRounds].reverse().find(r => r.role === 'B');
+        // 找出最近一条裁判意见（如有）
+        const lastJudge = [...currentRounds].reverse().find(r => r.role === 'JUDGE');
+
+        const parts = [];
+        if (lastA) parts.push(`[A 的上一版答案（${lastA.version}）]\n${lastA.content}`);
+        if (lastB) parts.push(`[B 对上一版的审查批评]\n${lastB.content}`);
+        if (lastJudge) parts.push(`[用户最新裁判意见]\n${lastJudge.content}`);
+        return parts.join('\n\n---\n\n');
+      };
+      const historyForA = buildRecentHistoryForA();
 
       setCurrentStep(`Round ${nextRoundNum} — ${providerNames.providerA} 正在深度修订答案……`);
       const aResult = await callClaude(
         SYSTEM_A_REVISE(firstPrinciple),
-        `用户的原始问题：\n${question}\n\n讨论历史：\n${historyForA}\n\n请输出你的修订版答案。新答案必须比上版更好地达成第一性目标。`,
+        `用户的原始问题：\n${question}\n\n以下是你需要回应的最近一轮反馈：\n${historyForA}\n\n请输出修订版答案。新答案必须比上版更好地达成第一性目标。`,
         { role: 'main', maxTokens: 2500 }
       );
       const version = `v${currentRounds.filter(r => r.role === 'A').length + 1}`;
@@ -418,12 +428,25 @@ ${goal}
     setError('');
     try {
       setCurrentStep('正在生成最终收敛答案……');
-      const history = rounds.map(r => {
-        if (r.role === 'A') return `[A 的 ${r.version} 答案]\n${r.content}`;
-        if (r.role === 'B') return `[B 的审查批评]\n${r.content}`;
-        if (r.role === 'JUDGE') return `[用户裁判介入]\n${r.content}`;
-        return '';
-      }).join('\n\n---\n\n');
+
+      // 智能压缩历史：最近一轮保留完整内容，更早的内容做摘要级截断
+      const buildCompactHistory = () => {
+        // 把 rounds 按 round 号分组
+        const lastRoundNum = rounds.length > 0 ? Math.max(...rounds.map(r => r.round || 0)) : 0;
+
+        return rounds.map(r => {
+          const isLastRound = (r.round || 0) === lastRoundNum;
+          const cap = isLastRound ? 2000 : 400; // 最后一轮保留充分，更早的限 400 字
+          const text = (r.content || '').slice(0, cap);
+          const truncated = (r.content || '').length > cap ? text + '\n......（节选）' : text;
+
+          if (r.role === 'A') return `[A 的 ${r.version} 答案${isLastRound ? '·最终版本' : ''}]\n${truncated}`;
+          if (r.role === 'B') return `[B 的审查批评${isLastRound ? '·最近一次' : ''}]\n${truncated}`;
+          if (r.role === 'JUDGE') return `[用户裁判介入]\n${truncated}`;
+          return '';
+        }).join('\n\n---\n\n');
+      };
+      const history = buildCompactHistory();
 
       const finalResult = await callClaude(
         `你是一个综合者。基于 A 和 B 的多轮对抗讨论以及用户的裁判介入，输出最终的、平衡的答案。
@@ -441,8 +464,8 @@ ${firstPrinciple}
 **给用户的具体行动建议**：（2-4 条可执行的下一步）
 
 风格：深入、有判断力，不必刻意短。`,
-        `用户原始问题：\n${question}\n\n完整讨论历史：\n${history}\n\n请输出最终收敛答案。`,
-        { role: 'synthesizer', maxTokens: 1500 }
+        `用户原始问题：\n${question}\n\n讨论历史（最近一轮完整保留，更早内容已节选）：\n${history}\n\n请输出最终收敛答案，重点参考最近一轮的内容，更早内容仅供参考。`,
+        { role: 'synthesizer', maxTokens: 2000 }
       );
       setRounds([...rounds, { role: 'FINAL', content: finalResult.text, model: finalResult.modelName }]);
       setStage('done');
