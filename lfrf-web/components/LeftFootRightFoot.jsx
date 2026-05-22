@@ -157,7 +157,29 @@ export default function LeftFootRightFoot() {
           }),
         });
 
-        const data = await response.json();
+        // 安全解析响应：Vercel 超时/错误页返回的是 HTML/纯文本，不是 JSON
+        let data;
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          try {
+            data = await response.json();
+          } catch (parseErr) {
+            // JSON 解析失败也可能发生（如响应被截断）
+            const fallbackText = '';
+            data = { error: { message: `响应解析失败（HTTP ${response.status}）。可能是请求超过 Vercel 60 秒上限被中断。${fallbackText}` } };
+          }
+        } else {
+          // 非 JSON 响应：通常是 Vercel 平台层的错误页
+          const text = await response.text();
+          const snippet = text.slice(0, 200).replace(/<[^>]*>/g, '').trim();
+          if (response.status === 504 || response.status === 408) {
+            data = { error: { message: `请求超时（HTTP ${response.status}）：单次响应超过 Vercel 60 秒上限。建议减少对话轮次，或在裁判意见中要求 AI 更精炼。` } };
+          } else if (response.status === 502 || response.status === 503) {
+            data = { error: { message: `Vercel 服务暂时不可用（HTTP ${response.status}）。请稍后重试。` } };
+          } else {
+            data = { error: { message: `服务返回了非 JSON 响应（HTTP ${response.status}）：${snippet || '无内容'}` } };
+          }
+        }
 
         if (response.ok && data.text) {
           if (typeof data.remaining === 'number') setRemaining(data.remaining);
@@ -219,33 +241,33 @@ export default function LeftFootRightFoot() {
 ${goal}
 
 回答要求：
-- 不要为了简洁而牺牲深度。该展开就展开，该举例就举例，该讨论权衡就讨论权衡。
-- 思考用户没说出口的隐含需求和边界条件。
-- 如果问题涉及多种情境或选择，分别讨论每一种。
-- 对关键论断给出推理过程，不要只下结论。
-- 主动指出你不确定的地方，以及哪些信息能帮你给出更好答案。
+- 精炼优先：用最少的篇幅说清最重要的事，避免冗长展开。
+- 不要堆砌"该展开就展开"的内容，每一段都必须服务于第一性目标。
+- 思考用户没说出口的隐含需求和边界条件，但简短指出即可。
+- 对关键论断给出简明推理，不要长篇大论。
+- 主动指出 1-2 个最关键的不确定点。
 - 在结尾用一句话回应"这个回答如何服务于第一性目标"。
 
-风格：务实、深入、有判断力，不要过度免责声明，不要套话开场，直接进入实质内容。
+风格：务实、精准、有判断力。不要过度免责声明，不要套话开场，直接进入实质内容。**控制在 800 字以内**。
 
-输出结构（用 Markdown 组织，长度根据问题复杂度自定，不必刻意短）：
-**核心判断 / 结论**
-**展开分析**（含子小节、清单、对比，按需）
-**关键权衡与不确定性**
-**置信度评估**：XX%（并简述依据）
+输出结构（用 Markdown 组织，简洁紧凑）：
+**核心判断 / 结论**（2-3 句）
+**关键理由**（3-5 点，每点 1-2 句）
+**关键权衡或不确定性**（1-2 点）
+**置信度评估**：XX%
 **对第一性目标的服务方式**：（1 句话）`;
 
-  const SYSTEM_A_REVISE = (goal) => `你是"主答者 A"，由 Claude Opus 4.7 担任。审查者 B 对你的上一版答案提出了批评，用户作为裁判可能也给了介入意见。
-请认真重写你的答案，给出一个比上版更深入、更全面、更对齐第一性目标的版本。
+  const SYSTEM_A_REVISE = (goal) => `你是"主答者 A"。审查者 B 对你的上一版答案提出了批评，用户作为裁判可能也给了介入意见。
+请精炼地重写你的答案，给出一个更对齐第一性目标的版本。
 
 【第一性目标】（修订必须更好地服务于此）：
 ${goal}
 
 修订原则：
-1. 不是小修小补，而是基于反馈做实质性的深化和重组
-2. 明确说明你改了什么、为什么改
-3. 如果某些批评你不接受，明确说明并给出理由（不要为了迎合而妥协）
-4. 该多写就多写，深度优先于篇幅控制
+1. 不是小修小补，而是基于反馈做实质性调整——但保持精炼
+2. 明确说明你改了什么、为什么改（简短，3-5 点即可）
+3. 如果某些批评你不接受，明确说明并给出理由
+4. **控制在 900 字以内**，深度优先于篇幅
 
 输出结构（用 Markdown）：
 **修订后的核心判断**
@@ -268,28 +290,29 @@ ${goal}
 第三步：每条批评结尾必须用一行说明"这如何影响第一性目标"。
 
 强制要求：
-- 必须找出至少 3 个、最多 5 个核心问题，禁止说"我同意"、"答案不错"
+- 必须找出 3 个核心问题（精选，不要凑数）
 - 每个问题必须用以下三个类别之一标注：[事实存疑] / [忽略视角] / [逻辑漏洞]
 - 站在用户利益角度，提出 A 可能没考虑到的关键盲点
+- 语言精炼，每条只说重点
 
-输出格式（用 Markdown）：
-**对齐第一性目标的总评：** （1 句话总结 A 的答案在达成第一性目标上的最大短板）
+输出格式（用 Markdown，控制在 600 字以内）：
+**对齐第一性目标的总评：** （1 句话）
 
 **问题清单：**
 
-**1. [类别] 标题**
-（2-3 句具体说明）
-*对第一性目标的影响：* （1 句话说明此问题如何阻碍目标达成）
+**1. [类别] 标题（简短有力）**
+（2 句具体说明，直击要害）
+*对第一性目标的影响：* （1 句话）
 
 **2. [类别] 标题**
-（2-3 句具体说明）
+（2 句具体说明）
 *对第一性目标的影响：* （1 句话）
 
 **3. [类别] 标题**
-（2-3 句具体说明）
+（2 句具体说明）
 *对第一性目标的影响：* （1 句话）
 
-不要超过 450 字。直接进入批评，不要客套。`;
+直接进入批评，不要客套，不要总结结尾。`;
 
   // 第一步：从问题提取第一性目标，进入确认页
   const extractGoal = async () => {
@@ -329,7 +352,7 @@ ${goal}
       const aResult = await callClaude(
         SYSTEM_A_INITIAL(firstPrinciple),
         question,
-        { role: 'main', maxTokens: 2500 }
+        { role: 'main', maxTokens: 1500 }
       );
       const newRounds = [{ role: 'A', content: aResult.text, version: 'v1', round: 1, model: aResult.modelName }];
       setRounds([...newRounds]);
@@ -339,7 +362,7 @@ ${goal}
       const bResult = await callClaude(
         SYSTEM_B(firstPrinciple),
         `用户的问题是：\n${question}\n\nA 的回答是：\n${aResult.text}\n\n请按"先发散后收敛"的方式输出你的审查批评，每条都要回答它如何影响第一性目标。`,
-        { role: 'critic', maxTokens: 2000 }
+        { role: 'critic', maxTokens: 800 }
       );
       newRounds.push({ role: 'B', content: bResult.text, round: 1, model: bResult.modelName });
       setRounds([...newRounds]);
@@ -396,7 +419,7 @@ ${goal}
       const aResult = await callClaude(
         SYSTEM_A_REVISE(firstPrinciple),
         `用户的原始问题：\n${question}\n\n以下是你需要回应的最近一轮反馈：\n${historyForA}\n\n请输出修订版答案。新答案必须比上版更好地达成第一性目标。`,
-        { role: 'main', maxTokens: 2500 }
+        { role: 'main', maxTokens: 1500 }
       );
       const version = `v${currentRounds.filter(r => r.role === 'A').length + 1}`;
       currentRounds.push({ role: 'A', content: aResult.text, version, round: nextRoundNum, model: aResult.modelName });
@@ -407,7 +430,7 @@ ${goal}
       const bResult = await callClaude(
         SYSTEM_B(firstPrinciple),
         `用户的问题：\n${question}\n\n这是 A 的修订版答案（${version}）：\n${aResult.text}\n\n请重点审查：A 是否在向第一性目标真正收敛？是否引入了新问题或新分歧？按格式输出。`,
-        { role: 'critic', maxTokens: 2000 }
+        { role: 'critic', maxTokens: 800 }
       );
       currentRounds.push({ role: 'B', content: bResult.text, round: nextRoundNum, model: bResult.modelName });
       setRounds([...currentRounds]);
@@ -465,7 +488,7 @@ ${firstPrinciple}
 
 风格：深入、有判断力，不必刻意短。`,
         `用户原始问题：\n${question}\n\n讨论历史（最近一轮完整保留，更早内容已节选）：\n${history}\n\n请输出最终收敛答案，重点参考最近一轮的内容，更早内容仅供参考。`,
-        { role: 'synthesizer', maxTokens: 2000 }
+        { role: 'synthesizer', maxTokens: 1800 }
       );
       setRounds([...rounds, { role: 'FINAL', content: finalResult.text, model: finalResult.modelName }]);
       setStage('done');
@@ -502,7 +525,7 @@ ${firstPrinciple}
             <div className="text-sm font-medium text-red-900 mb-1">操作失败</div>
             <div className="text-xs text-red-800 leading-relaxed break-words font-mono whitespace-pre-wrap">{error}</div>
             <div className="text-[11px] text-red-600 mt-2 leading-relaxed">
-              已自动重试 2 次仍未成功。可能原因：API 限流、网络抖动，或当前环境不支持指定模型。
+              已自动重试 2 次仍未成功。常见原因：响应超过 60 秒、API 限流、网络抖动。可尝试：让讨论继续（不输入裁判意见）、或点"直接收敛"结束本次讨论。
             </div>
           </div>
         </div>
