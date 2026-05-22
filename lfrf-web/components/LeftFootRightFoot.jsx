@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Pause, SkipForward, Target, Sparkles, AlertTriangle, Eye, FileSearch, Gavel, RotateCw, ChevronRight, Loader2, Copy, Check, Quote, Lock } from 'lucide-react';
+import { Send, Pause, SkipForward, Target, Sparkles, AlertTriangle, Eye, FileSearch, Gavel, RotateCw, ChevronRight, ChevronDown, Loader2, Copy, Check, Quote, Lock } from 'lucide-react';
 
 export default function LeftFootRightFoot() {
   const [password, setPassword] = useState('');
@@ -20,6 +20,7 @@ export default function LeftFootRightFoot() {
   const [copied, setCopied] = useState(false);
   const [selection, setSelection] = useState(null); // {text, x, y, sourceLabel}
   const [lastFailedAction, setLastFailedAction] = useState(null); // function to retry
+  const [newBToast, setNewBToast] = useState(null); // {roundNum, modelName, ts} — B 跑完后右下角浮动提示
   const scrollRef = useRef(null);
   const judgeInputRef = useRef(null);
   const conversationRef = useRef(null);
@@ -29,6 +30,14 @@ export default function LeftFootRightFoot() {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [rounds, currentStep]);
+
+  // B 提示自动消失：当用户滚动到 B 的位置（可见）时
+  useEffect(() => {
+    if (!newBToast) return;
+    // 5 秒后自动消失（如果用户没主动点）
+    const timer = setTimeout(() => setNewBToast(null), 5000);
+    return () => clearTimeout(timer);
+  }, [newBToast]);
 
   // 恢复保存的密码（朋友只需输入一次）
   useEffect(() => {
@@ -460,50 +469,58 @@ ${goal}
     }
   };
 
-  // 异步触发 B 审查（fire-and-forget，不阻塞 UI）
-  // 会在 rounds 中插入一个 pending 状态的 B 占位，跑完后更新为 done
+  // 后台触发 B 审查（fire-and-forget，不占位、不阻塞 UI）
+  // B 跑完才会被插入到 rounds，跑的过程中 UI 上没有任何痕迹
+  // 跑完后会通过 newBToastRound 触发右下角提示
   const triggerBReview = (aContent, roundNum, isRevise = false, aVersion = '') => {
-    // 先插入 pending 占位
-    setRounds(prev => [...prev, {
-      role: 'B',
-      content: '',
-      round: roundNum,
-      model: providerNames.providerB,
-      status: 'pending',
-      expanded: false,
-    }]);
-
     const userMessage = isRevise
       ? `用户的问题：\n${question}\n\n这是 A 的修订版答案（${aVersion}）：\n${aContent}\n\n请重点审查：A 是否在向第一性目标真正收敛？是否引入了新问题或新分歧？按格式输出。`
       : `用户的问题是：\n${question}\n\nA 的回答是：\n${aContent}\n\n请按"先发散后收敛"的方式输出你的审查批评，每条都要回答它如何影响第一性目标。`;
 
-    // 后台跑，跑完更新 rounds 中那条 pending B
     callClaude(
       SYSTEM_B(firstPrinciple),
       userMessage,
       { role: 'critic', maxTokens: 800 }
     ).then(bResult => {
-      setRounds(prev => prev.map(r => {
-        if (r.role === 'B' && r.round === roundNum && r.status === 'pending') {
-          return { ...r, content: bResult.text, model: bResult.modelName, status: 'done' };
-        }
-        return r;
-      }));
+      // 跑完才插入 B（默认展开状态，因为之前没占位过）
+      setRounds(prev => [...prev, {
+        role: 'B',
+        content: bResult.text,
+        round: roundNum,
+        model: bResult.modelName,
+        status: 'done',
+        expanded: true,
+      }]);
+      // 触发右下角 toast 提示
+      setNewBToast({ roundNum, modelName: bResult.modelName, ts: Date.now() });
     }).catch(err => {
-      setRounds(prev => prev.map(r => {
-        if (r.role === 'B' && r.round === roundNum && r.status === 'pending') {
-          return { ...r, content: `审查失败：${err.message}`, status: 'failed' };
-        }
-        return r;
-      }));
+      // 失败：插入一条 failed 标记（可关闭）
+      setRounds(prev => [...prev, {
+        role: 'B',
+        content: `审查失败：${err.message}`,
+        round: roundNum,
+        model: providerNames.providerB,
+        status: 'failed',
+        dismissed: false,
+      }]);
     });
   };
 
-  // 用户点击展开/折叠 B 卡片
+  // 用户点击展开/折叠 B 卡片（保留功能，用户读完后想折叠的话）
   const toggleBExpanded = (roundNum) => {
     setRounds(prev => prev.map(r => {
       if (r.role === 'B' && r.round === roundNum) {
         return { ...r, expanded: !r.expanded };
+      }
+      return r;
+    }));
+  };
+
+  // 关闭失败的 B 标记
+  const dismissFailedB = (roundNum) => {
+    setRounds(prev => prev.map(r => {
+      if (r.role === 'B' && r.round === roundNum && r.status === 'failed') {
+        return { ...r, dismissed: true };
       }
       return r;
     }));
@@ -520,53 +537,31 @@ ${goal}
     setLoading(true);
 
     try {
-      // Round 1 - A 主答（流式）
+      // Round 1 - A 主答（非流式，一次性生成）
       setCurrentStep(`${providerNames.providerA} 正在深度思考第一轮答案……`);
-
-      // 立刻插入一个 A 的"占位卡片"（status: streaming），content 边收边追加
-      setRounds([{
-        role: 'A',
-        content: '',
-        version: 'v1',
-        round: 1,
-        model: providerNames.providerA,
-        status: 'streaming',
-      }]);
-      // A 一开始流式，UI 立即解锁，用户能看到字逐渐出来
-      setCurrentStep('');
-      setLoading(false);
 
       const aResult = await callClaude(
         SYSTEM_A_INITIAL(firstPrinciple),
         question,
-        {
-          role: 'main',
-          maxTokens: 1500,
-          onChunk: (delta, accumulated) => {
-            // 实时把累积内容写回 rounds
-            setRounds(prev => prev.map(r =>
-              (r.role === 'A' && r.round === 1 && r.status === 'streaming')
-                ? { ...r, content: accumulated }
-                : r
-            ));
-          },
-        }
+        { role: 'main', maxTokens: 1500 }
       );
 
-      // A 完成：标记 status 为 done，更新 modelName
-      setRounds(prev => prev.map(r =>
-        (r.role === 'A' && r.round === 1 && r.status === 'streaming')
-          ? { ...r, content: aResult.text, model: aResult.modelName || r.model, status: undefined }
-          : r
-      ));
+      // A 一次性插入到 rounds
+      setRounds([{
+        role: 'A',
+        content: aResult.text,
+        version: 'v1',
+        round: 1,
+        model: aResult.modelName,
+      }]);
+      setCurrentStep('');
+      setLoading(false); // A 出来后立即解锁 UI
 
-      // B 后台静默跑（不 await，不阻塞）—— 非流式
+      // B 后台静默跑（不 await，不阻塞）
       triggerBReview(aResult.text, 1, false);
     } catch (e) {
       setError(e.message);
       setLastFailedAction(() => runDebate);
-      // 如果 A 还在 streaming 状态，把它从 rounds 移除（避免留下半截）
-      setRounds(prev => prev.filter(r => !(r.role === 'A' && r.status === 'streaming')));
       setStage('confirming-goal');
       setCurrentStep('');
       setLoading(false);
@@ -612,51 +607,30 @@ ${goal}
       setCurrentStep(`Round ${nextRoundNum} — ${providerNames.providerA} 正在深度修订答案……`);
       const version = `v${currentRounds.filter(r => r.role === 'A').length + 1}`;
 
-      // 立即插入 A 修订版的占位卡片
-      const placeholderA = {
-        role: 'A',
-        content: '',
-        version,
-        round: nextRoundNum,
-        model: providerNames.providerA,
-        status: 'streaming',
-      };
-      currentRounds.push(placeholderA);
-      setRounds([...currentRounds]);
-      setCurrentStep('');
-      setLoading(false); // A 一开始流式就解锁 UI
-
       const aResult = await callClaude(
         SYSTEM_A_REVISE(firstPrinciple),
         `用户的原始问题：\n${question}\n\n以下是你需要回应的最近一轮反馈：\n${historyForA}\n\n请输出修订版答案。新答案必须比上版更好地达成第一性目标。`,
-        {
-          role: 'main',
-          maxTokens: 1500,
-          onChunk: (delta, accumulated) => {
-            setRounds(prev => prev.map(r =>
-              (r.role === 'A' && r.round === nextRoundNum && r.status === 'streaming')
-                ? { ...r, content: accumulated }
-                : r
-            ));
-          },
-        }
+        { role: 'main', maxTokens: 1500 }
       );
 
-      // A 完成：清掉 streaming 状态
-      setRounds(prev => prev.map(r =>
-        (r.role === 'A' && r.round === nextRoundNum && r.status === 'streaming')
-          ? { ...r, content: aResult.text, model: aResult.modelName || r.model, status: undefined }
-          : r
-      ));
+      // A 修订版一次性插入
+      currentRounds.push({
+        role: 'A',
+        content: aResult.text,
+        version,
+        round: nextRoundNum,
+        model: aResult.modelName,
+      });
+      setRounds([...currentRounds]);
+      setCurrentStep('');
+      setLoading(false);
 
-      // B 二审后台跑（不 await）—— 非流式
+      // B 二审后台跑（不 await）
       triggerBReview(aResult.text, nextRoundNum, true, version);
     } catch (e) {
       setError(e.message);
       setCurrentStep('');
       setLoading(false);
-      // 清理半截 streaming 状态
-      setRounds(prev => prev.filter(r => !(r.role === 'A' && r.status === 'streaming')));
       // 重试：保留当前 rounds（含已添加的 judge），重新跑剩余流程
       setLastFailedAction(() => submitJudgeAndContinue);
     }
@@ -691,17 +665,6 @@ ${goal}
       };
       const history = buildCompactHistory();
 
-      // 立即插入 FINAL 占位卡片（streaming 状态）
-      const placeholderFinal = {
-        role: 'FINAL',
-        content: '',
-        model: providerNames.providerA,
-        status: 'streaming',
-      };
-      setRounds(prev => [...prev, placeholderFinal]);
-      setCurrentStep('');
-      setLoading(false); // 解锁 UI，让用户能看到字逐渐出来
-
       const finalResult = await callClaude(
         `你是一个综合者。基于 A 和 B 的多轮对抗讨论以及用户的裁判介入，输出最终的、平衡的答案。
 
@@ -719,31 +682,21 @@ ${firstPrinciple}
 
 风格：深入、有判断力，不必刻意短。`,
         `用户原始问题：\n${question}\n\n讨论历史（最近一轮完整保留，更早内容已节选）：\n${history}\n\n请输出最终收敛答案，重点参考最近一轮的内容，更早内容仅供参考。`,
-        {
-          role: 'synthesizer',
-          maxTokens: 1800,
-          onChunk: (delta, accumulated) => {
-            setRounds(prev => prev.map(r =>
-              (r.role === 'FINAL' && r.status === 'streaming')
-                ? { ...r, content: accumulated }
-                : r
-            ));
-          },
-        }
+        { role: 'synthesizer', maxTokens: 1800 }
       );
 
-      // FINAL 完成：清掉 streaming 状态
-      setRounds(prev => prev.map(r =>
-        (r.role === 'FINAL' && r.status === 'streaming')
-          ? { ...r, content: finalResult.text, model: finalResult.modelName || r.model, status: undefined }
-          : r
-      ));
+      // FINAL 一次性插入
+      setRounds(prev => [...prev, {
+        role: 'FINAL',
+        content: finalResult.text,
+        model: finalResult.modelName,
+      }]);
+      setCurrentStep('');
       setStage('done');
+      setLoading(false);
     } catch (e) {
       setError(e.message);
       setCurrentStep('');
-      // 清理半截 streaming 的 FINAL
-      setRounds(prev => prev.filter(r => !(r.role === 'FINAL' && r.status === 'streaming')));
       setLastFailedAction(() => converge);
       setLoading(false);
     }
@@ -1081,7 +1034,6 @@ ${firstPrinciple}
           <div ref={conversationRef}>
           {rounds.map((r, idx) => {
             if (r.role === 'A') {
-              const isStreaming = r.status === 'streaming';
               return (
                 <div key={idx} data-source-label={`A 的 ${r.version}`} className="border-b border-stone-100 p-5">
                   <div className="flex items-center gap-2 mb-3">
@@ -1090,59 +1042,44 @@ ${firstPrinciple}
                       <div className="text-sm font-medium flex items-center gap-2">
                         主答者 A
                         <span className="text-[10px] px-1.5 py-0.5 bg-purple-100 text-purple-800 rounded font-medium">{r.model || providerNames.providerA}</span>
-                        {isStreaming && (
-                          <span className="text-[10px] text-purple-600 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse"></span>
-                            正在生成…
-                          </span>
-                        )}
                       </div>
                       <div className="text-xs text-stone-500">Round {r.round} · {r.version} · 深度回答</div>
                     </div>
                     <span className="text-xs px-2 py-1 bg-purple-50 text-purple-800 rounded-full border border-purple-200">{r.version}</span>
                   </div>
                   <div className="text-sm text-stone-700 leading-relaxed pl-10 select-text">
-                    {r.content ? renderMarkdown(r.content) : (
-                      isStreaming ? <span className="text-stone-400">思考中…</span> : null
-                    )}
-                    {isStreaming && r.content && <span className="inline-block w-1.5 h-4 bg-purple-500 ml-0.5 animate-pulse align-middle"></span>}
+                    {renderMarkdown(r.content)}
                   </div>
                 </div>
               );
             }
             if (r.role === 'B') {
-              // 状态机：pending（占位条）/ done 未展开（提示条）/ done 已展开（完整卡片）/ failed
-              const status = r.status || 'done'; // 旧数据兼容：没有 status 字段视为 done
+              // 新模型：B 只在跑完才插入 rounds，所以没有 pending 状态
+              // status: 'done' （默认展开） / 'failed'（红色条，可关闭）
+              const status = r.status || 'done';
 
-              // pending：A 出来了，B 还在跑
-              if (status === 'pending') {
-                return (
-                  <div key={idx} className="border-b border-stone-100 px-5 py-3 bg-orange-50/20">
-                    <div className="flex items-center justify-center gap-3 text-xs text-stone-500 py-2">
-                      <span className="text-stone-300">···</span>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600" />
-                      <span>{r.model || providerNames.providerB} 正在审查中……（可继续阅读 A 的回答）</span>
-                      <span className="text-stone-300">···</span>
-                    </div>
-                  </div>
-                );
-              }
-
-              // failed：B 失败了
+              // failed：B 失败了，可关闭
               if (status === 'failed') {
+                if (r.dismissed) return null; // 用户关掉就不显示
                 return (
-                  <div key={idx} className="border-b border-stone-100 px-5 py-3 bg-red-50/30">
-                    <div className="flex items-center justify-center gap-3 text-xs text-red-700 py-2">
-                      <span className="text-red-300">···</span>
-                      <AlertTriangle className="w-3.5 h-3.5" />
-                      <span>审查者 B 审查未完成（可忽略，不影响后续讨论）</span>
-                      <span className="text-red-300">···</span>
+                  <div key={idx} className="border-b border-stone-100 px-5 py-2.5 bg-red-50/30">
+                    <div className="flex items-center justify-between gap-3 text-xs text-red-700">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        <span>审查者 B 审查未完成（可忽略，不影响后续讨论）</span>
+                      </div>
+                      <button
+                        onClick={() => dismissFailedB(r.round)}
+                        className="text-red-500 hover:text-red-900 text-[11px] px-2 py-0.5 rounded hover:bg-red-100/60 transition"
+                      >
+                        关闭
+                      </button>
                     </div>
                   </div>
                 );
               }
 
-              // done 未展开：可点击的提示条
+              // done 折叠状态（用户主动收起后）
               if (!r.expanded) {
                 return (
                   <div key={idx} className="border-b border-stone-100 bg-orange-50/30">
@@ -1160,7 +1097,7 @@ ${firstPrinciple}
                 );
               }
 
-              // done 已展开：完整卡片，附带折叠按钮
+              // done 展开（默认）：完整卡片，附带折叠按钮
               return (
                 <div key={idx} data-source-label={`B 的 Round ${r.round} 审查`} className="border-b border-stone-100 p-5 bg-orange-50/30">
                   <div className="flex items-center gap-2 mb-3">
@@ -1198,7 +1135,6 @@ ${firstPrinciple}
               );
             }
             if (r.role === 'FINAL') {
-              const isStreaming = r.status === 'streaming';
               return (
                 <div key={idx} data-source-label={`最终答案`} className="border-b border-stone-100 p-5 bg-gradient-to-b from-green-50/50 to-white">
                   <div className="flex items-center gap-2 mb-3">
@@ -1207,21 +1143,12 @@ ${firstPrinciple}
                       <div className="text-sm font-medium text-green-900 flex items-center gap-2">
                         最终收敛答案
                         <span className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-800 rounded font-medium">{r.model || providerNames.providerA}</span>
-                        {isStreaming && (
-                          <span className="text-[10px] text-green-700 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-green-600 animate-pulse"></span>
-                            正在综合…
-                          </span>
-                        )}
                       </div>
                       <div className="text-xs text-green-700">综合双方观点 + 你的裁判意见</div>
                     </div>
                   </div>
                   <div className="text-sm text-stone-800 leading-relaxed pl-10 select-text">
-                    {r.content ? renderMarkdown(r.content) : (
-                      isStreaming ? <span className="text-stone-400">综合中…</span> : null
-                    )}
-                    {isStreaming && r.content && <span className="inline-block w-1.5 h-4 bg-green-600 ml-0.5 animate-pulse align-middle"></span>}
+                    {renderMarkdown(r.content)}
                   </div>
                 </div>
               );
@@ -1253,44 +1180,65 @@ ${firstPrinciple}
               引用到裁判意见
             </button>
           )}
+
+          {/* B 已给出审查意见的浮动提示（像微信"新消息"那样） */}
+          {newBToast && (
+            <button
+              onClick={() => {
+                // 点击：滚到该 round 的 B 位置 + 关闭提示
+                const targetRound = newBToast.roundNum;
+                setNewBToast(null);
+                // 尝试找到对应的 B 卡片元素并滚动到它
+                requestAnimationFrame(() => {
+                  const container = scrollRef.current;
+                  if (!container) return;
+                  const cards = container.querySelectorAll('[data-source-label]');
+                  for (const card of cards) {
+                    const label = card.getAttribute('data-source-label') || '';
+                    if (label.includes(`B 的 Round ${targetRound}`)) {
+                      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      break;
+                    }
+                  }
+                });
+              }}
+              className="absolute bottom-4 right-4 z-20 bg-orange-600 text-white text-xs px-3.5 py-2 rounded-full shadow-lg flex items-center gap-2 hover:bg-orange-700 transition animate-bounce-once"
+              style={{ animation: 'fadeInUp 0.3s ease-out' }}
+            >
+              <span className="w-4 h-4 rounded-md bg-white/20 flex items-center justify-center font-medium text-[10px]">B</span>
+              {newBToast.modelName || providerNames.providerB} 已给出审查意见
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
         {/* 底部操作 */}
-        {stage === 'running' && !loading && rounds.length > 0 && (() => {
-          const aStreaming = rounds.some(r => r.role === 'A' && r.status === 'streaming');
-          return (
+        {stage === 'running' && !loading && rounds.length > 0 && (
           <div className="bg-white border-x border-b border-stone-200 rounded-b-2xl p-4">
             <textarea
               ref={judgeInputRef}
               value={judgeInput}
               onChange={(e) => setJudgeInput(e.target.value)}
-              placeholder={aStreaming ? "等 A 答完后再补充意见……（在上方划选文字可直接引用）" : "作为裁判，补充信息、表态、或指定下一轮重点……（在上方划选文字可直接引用）"}
-              disabled={aStreaming}
-              className="w-full p-3 border border-stone-200 rounded-lg text-sm resize-none focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 mb-3 whitespace-pre-wrap disabled:bg-stone-50 disabled:cursor-not-allowed"
+              placeholder="作为裁判，补充信息、表态、或指定下一轮重点……（在上方划选文字可直接引用）"
+              className="w-full p-3 border border-stone-200 rounded-lg text-sm resize-none focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 mb-3 whitespace-pre-wrap"
               rows={3}
             />
             <div className="flex gap-2">
               <button
                 onClick={submitJudgeAndContinue}
-                disabled={aStreaming}
-                className="flex-1 bg-stone-900 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-stone-800 flex items-center justify-center gap-2 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                className="flex-1 bg-stone-900 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-stone-800 flex items-center justify-center gap-2 transition"
               >
-                {aStreaming
-                  ? <><Loader2 className="w-4 h-4 animate-spin" /> A 正在生成，请稍候</>
-                  : (judgeInput.trim() ? <><Send className="w-4 h-4" /> 提交裁判意见并继续下一轮</> : <><ChevronRight className="w-4 h-4" /> 让它们继续下一轮</>)
-                }
+                {judgeInput.trim() ? <><Send className="w-4 h-4" /> 提交裁判意见并继续下一轮</> : <><ChevronRight className="w-4 h-4" /> 让它们继续下一轮</>}
               </button>
               <button
                 onClick={converge}
-                disabled={aStreaming}
-                className="px-4 py-2.5 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 flex items-center gap-1.5 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                className="px-4 py-2.5 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 flex items-center gap-1.5 transition"
               >
                 <Target className="w-4 h-4" /> 直接收敛
               </button>
             </div>
           </div>
-          );
-        })()}
+        )}
 
         {stage === 'running' && loading && (
           <div className="bg-white border-x border-b border-stone-200 rounded-b-2xl p-5 text-center text-xs text-stone-400">
