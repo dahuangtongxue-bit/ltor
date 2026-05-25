@@ -7,13 +7,11 @@
     "build": "next build",
     "start": "next start",
     "pages:build": "npx @cloudflare/next-on-pages",
-    "pages:deploy": "npm run pages:build && wrangler pages deploy .vercel/output/static",
-    "pages:watch": "npx @cloudflare/next-on-pages --watch",
-    "pages:dev": "npx wrangler pages dev .vercel/output/static --compatibility-flag=nodejs_compat"
+    "pages:deploy": "npm run pages:build && wrangler pages deploy .vercel/output/static"
   },
   "dependencies": {
     "lucide-react": "^0.460.0",
-    "next": "^14.3.0",
+    "next": "15.4.10",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
