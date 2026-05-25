@@ -9,24 +9,24 @@
 // 真正的限流应该用 Cloudflare KV / Upstash Redis 等外部存储。
 // MVP 阶段先这样，限流主要靠 ACCESS_PASSWORD 这一层。
 
-// 跨平台读环境变量：Cloudflare Pages 通过 getRequestContext().env，Vercel/Node 通过 process.env
-// 优先尝试 Cloudflare（如果 @cloudflare/next-on-pages 注入了 context），失败则回退到 process.env
+// 跨平台读环境变量：
+// - 通过 next.config.js 的 env 字段，build 时 Next.js 把变量编译进代码
+//   所以运行时 process.env.XXX 在 Cloudflare/Vercel/Node 都能读到（已被替换成字面量）
+// - 同时保留 getRequestContext 作为备选方案
 function getEnv(key) {
-  // 1. Cloudflare Pages with @cloudflare/next-on-pages
+  // 1. 优先 process.env：build 时已被 Next.js 编译为字面量
+  try {
+    if (typeof process !== 'undefined' && process.env && process.env[key]) {
+      return process.env[key];
+    }
+  } catch (e) {}
+
+  // 2. 备选：Cloudflare getRequestContext
   try {
     const { getRequestContext } = require('@cloudflare/next-on-pages');
     const ctx = getRequestContext();
     if (ctx && ctx.env && ctx.env[key] !== undefined) {
       return ctx.env[key];
-    }
-  } catch (e) {
-    // require 失败或 ctx 不存在（说明在 Vercel/Node 环境下），继续走 fallback
-  }
-
-  // 2. Fallback: Node.js / Vercel Edge 通过 process.env
-  try {
-    if (typeof process !== 'undefined' && process.env) {
-      return process.env[key];
     }
   } catch (e) {}
 
