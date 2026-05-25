@@ -2,6 +2,12 @@
 // PROVIDER_A: 用于主答者（main）、综合者（synthesizer）、目标提取器（goal）
 // PROVIDER_B: 用于审查者（critic）
 // OpenAI 兼容格式：DeepSeek / Kimi / 智谱 / 豆包 / 阿里通义 / OpenAI / 月之暗面 都支持
+//
+// 注意：本路由使用 Edge Runtime（兼容 Vercel Edge 和 Cloudflare Pages）
+// 由于 Edge isolate 不持久化内存，下面这个 usageMap 限流在 Cloudflare 上是 per-instance 的，
+// 实际只对单一 isolate 内的连续请求生效，跨 isolate 不共享。
+// 真正的限流应该用 Cloudflare KV / Upstash Redis 等外部存储。
+// MVP 阶段先这样，限流主要靠 ACCESS_PASSWORD 这一层。
 
 const usageMap = new Map();
 const DAILY_LIMIT = parseInt(process.env.DAILY_LIMIT_PER_IP || '20');
@@ -308,5 +314,4 @@ export async function GET() {
   });
 }
 
-export const runtime = 'nodejs';
-export const maxDuration = 60;
+export const runtime = 'edge';
