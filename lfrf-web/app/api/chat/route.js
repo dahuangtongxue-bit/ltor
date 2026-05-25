@@ -9,8 +9,31 @@
 // 真正的限流应该用 Cloudflare KV / Upstash Redis 等外部存储。
 // MVP 阶段先这样，限流主要靠 ACCESS_PASSWORD 这一层。
 
+// 跨平台读环境变量：Cloudflare Pages 通过 getRequestContext().env，Vercel/Node 通过 process.env
+// 优先尝试 Cloudflare（如果 @cloudflare/next-on-pages 注入了 context），失败则回退到 process.env
+function getEnv(key) {
+  // 1. Cloudflare Pages with @cloudflare/next-on-pages
+  try {
+    const { getRequestContext } = require('@cloudflare/next-on-pages');
+    const ctx = getRequestContext();
+    if (ctx && ctx.env && ctx.env[key] !== undefined) {
+      return ctx.env[key];
+    }
+  } catch (e) {
+    // require 失败或 ctx 不存在（说明在 Vercel/Node 环境下），继续走 fallback
+  }
+
+  // 2. Fallback: Node.js / Vercel Edge 通过 process.env
+  try {
+    if (typeof process !== 'undefined' && process.env) {
+      return process.env[key];
+    }
+  } catch (e) {}
+
+  return undefined;
+}
+
 const usageMap = new Map();
-const DAILY_LIMIT = parseInt(process.env.DAILY_LIMIT_PER_IP || '20');
 
 function getIp(req) {
   return req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
@@ -19,35 +42,36 @@ function getIp(req) {
 }
 
 function checkRateLimit(ip) {
+  const DAILY_LIMIT = parseInt(getEnv('DAILY_LIMIT_PER_IP') || '20');
   const now = Date.now();
   const record = usageMap.get(ip);
   if (!record || now > record.resetAt) {
     usageMap.set(ip, { count: 1, resetAt: now + 24 * 60 * 60 * 1000 });
-    return { ok: true, remaining: DAILY_LIMIT - 1 };
+    return { ok: true, remaining: DAILY_LIMIT - 1, dailyLimit: DAILY_LIMIT };
   }
   if (record.count >= DAILY_LIMIT) {
-    return { ok: false, remaining: 0, resetAt: record.resetAt };
+    return { ok: false, remaining: 0, resetAt: record.resetAt, dailyLimit: DAILY_LIMIT };
   }
   record.count += 1;
-  return { ok: true, remaining: DAILY_LIMIT - record.count };
+  return { ok: true, remaining: DAILY_LIMIT - record.count, dailyLimit: DAILY_LIMIT };
 }
 
 // 根据 role 选 provider：critic 走 B，其他（main / synthesizer / goal）走 A
 function getProviderConfig(role) {
   if (role === 'critic') {
     return {
-      baseUrl: process.env.PROVIDER_B_BASE_URL,
-      apiKey: process.env.PROVIDER_B_API_KEY,
-      model: process.env.PROVIDER_B_MODEL,
-      displayName: process.env.PROVIDER_B_DISPLAY_NAME || 'Provider B',
+      baseUrl: getEnv('PROVIDER_B_BASE_URL'),
+      apiKey: getEnv('PROVIDER_B_API_KEY'),
+      model: getEnv('PROVIDER_B_MODEL'),
+      displayName: getEnv('PROVIDER_B_DISPLAY_NAME') || 'Provider B',
       label: 'B',
     };
   }
   return {
-    baseUrl: process.env.PROVIDER_A_BASE_URL,
-    apiKey: process.env.PROVIDER_A_API_KEY,
-    model: process.env.PROVIDER_A_MODEL,
-    displayName: process.env.PROVIDER_A_DISPLAY_NAME || 'Provider A',
+    baseUrl: getEnv('PROVIDER_A_BASE_URL'),
+    apiKey: getEnv('PROVIDER_A_API_KEY'),
+    model: getEnv('PROVIDER_A_MODEL'),
+    displayName: getEnv('PROVIDER_A_DISPLAY_NAME') || 'Provider A',
     label: 'A',
   };
 }
@@ -57,7 +81,8 @@ export async function POST(req) {
     const body = await req.json();
     const { password, role, system, message, maxTokens, stream } = body;
 
-    if (process.env.ACCESS_PASSWORD && password !== process.env.ACCESS_PASSWORD) {
+    const accessPassword = getEnv('ACCESS_PASSWORD');
+    if (accessPassword && password !== accessPassword) {
       return Response.json({ error: { type: 'unauthorized', message: '访问密码错误' } }, { status: 401 });
     }
 
@@ -66,7 +91,7 @@ export async function POST(req) {
     if (!rl.ok) {
       const hoursLeft = Math.ceil((rl.resetAt - Date.now()) / (60 * 60 * 1000));
       return Response.json({
-        error: { type: 'rate_limit', message: `你今天已用完 ${DAILY_LIMIT} 次额度，${hoursLeft} 小时后重置` }
+        error: { type: 'rate_limit', message: `你今天已用完 ${rl.dailyLimit} 次额度，${hoursLeft} 小时后重置` }
       }, { status: 429 });
     }
 
@@ -93,7 +118,7 @@ export async function POST(req) {
 
     // 可选：禁用 thinking 模式
     const disableThinkingKey = `PROVIDER_${provider.label}_DISABLE_THINKING`;
-    if (process.env[disableThinkingKey] === 'true') {
+    if (getEnv(disableThinkingKey) === 'true') {
       requestBody.thinking = { type: 'disabled' };
       requestBody.enable_thinking = false;
     }
@@ -309,8 +334,8 @@ async function handleStream(endpoint, requestBody, provider, rl) {
 // 公开两个 provider 的显示名，前端展示用
 export async function GET() {
   return Response.json({
-    providerA: process.env.PROVIDER_A_DISPLAY_NAME || 'Provider A',
-    providerB: process.env.PROVIDER_B_DISPLAY_NAME || 'Provider B',
+    providerA: getEnv('PROVIDER_A_DISPLAY_NAME') || 'Provider A',
+    providerB: getEnv('PROVIDER_B_DISPLAY_NAME') || 'Provider B',
   });
 }
 
