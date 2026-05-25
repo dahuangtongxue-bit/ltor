@@ -4,29 +4,31 @@
 // OpenAI 兼容格式：DeepSeek / Kimi / 智谱 / 豆包 / 阿里通义 / OpenAI / 月之暗面 都支持
 //
 // 注意：本路由使用 Edge Runtime（兼容 Vercel Edge 和 Cloudflare Pages）
-// 由于 Edge isolate 不持久化内存，下面这个 usageMap 限流在 Cloudflare 上是 per-instance 的，
-// 实际只对单一 isolate 内的连续请求生效，跨 isolate 不共享。
-// 真正的限流应该用 Cloudflare KV / Upstash Redis 等外部存储。
-// MVP 阶段先这样，限流主要靠 ACCESS_PASSWORD 这一层。
+// 环境变量读取策略：
+//   - Cloudflare Pages：通过 getRequestContext().env（官方标准方式）
+//   - Vercel Edge / Node.js：通过 process.env
+//   - 通过 try-catch 优雅降级，保证两个平台都能跑
 
-// 跨平台读环境变量：
-// - 通过 next.config.js 的 env 字段，build 时 Next.js 把变量编译进代码
-//   所以运行时 process.env.XXX 在 Cloudflare/Vercel/Node 都能读到（已被替换成字面量）
-// - 同时保留 getRequestContext 作为备选方案
+// 静态 import：Cloudflare next-on-pages 官方推荐方式
+// 在 Vercel 环境下，这个 import 不会报错（只是 ctx 拿不到 env）
+import { getRequestContext } from '@cloudflare/next-on-pages';
+
 function getEnv(key) {
-  // 1. 优先 process.env：build 时已被 Next.js 编译为字面量
+  // 1. 优先 Cloudflare：用 getRequestContext 拿到 env 对象
+  //    注意：必须在请求处理函数内部调用，不能在 module top-level 调用
+  try {
+    const ctx = getRequestContext();
+    if (ctx && ctx.env && ctx.env[key] !== undefined && ctx.env[key] !== '') {
+      return ctx.env[key];
+    }
+  } catch (e) {
+    // 不在 Cloudflare 环境（如 Vercel），继续 fallback
+  }
+
+  // 2. Fallback: process.env（Vercel / Node.js / Next 的 env 字段编译值）
   try {
     if (typeof process !== 'undefined' && process.env && process.env[key]) {
       return process.env[key];
-    }
-  } catch (e) {}
-
-  // 2. 备选：Cloudflare getRequestContext
-  try {
-    const { getRequestContext } = require('@cloudflare/next-on-pages');
-    const ctx = getRequestContext();
-    if (ctx && ctx.env && ctx.env[key] !== undefined) {
-      return ctx.env[key];
     }
   } catch (e) {}
 
