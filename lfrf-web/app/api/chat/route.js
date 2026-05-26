@@ -3,35 +3,14 @@
 // PROVIDER_B: 用于审查者（critic）
 // OpenAI 兼容格式：DeepSeek / Kimi / 智谱 / 豆包 / 阿里通义 / OpenAI / 月之暗面 都支持
 //
-// 注意：本路由使用 Edge Runtime（兼容 Vercel Edge 和 Cloudflare Pages）
-// 环境变量读取策略：
-//   - Cloudflare Pages：通过 getRequestContext().env（官方标准方式）
-//   - Vercel Edge / Node.js：通过 process.env
-//   - 通过 try-catch 优雅降级，保证两个平台都能跑
-
-// 静态 import：Cloudflare next-on-pages 官方推荐方式
-// 在 Vercel 环境下，这个 import 不会报错（只是 ctx 拿不到 env）
-import { getRequestContext } from '@cloudflare/next-on-pages';
+// 注意：本路由使用 Edge Runtime（兼容 Vercel Edge 和 Netlify Edge）
 
 function getEnv(key) {
-  // 1. 优先 Cloudflare：用 getRequestContext 拿到 env 对象
-  //    注意：必须在请求处理函数内部调用，不能在 module top-level 调用
-  try {
-    const ctx = getRequestContext();
-    if (ctx && ctx.env && ctx.env[key] !== undefined && ctx.env[key] !== '') {
-      return ctx.env[key];
-    }
-  } catch (e) {
-    // 不在 Cloudflare 环境（如 Vercel），继续 fallback
-  }
-
-  // 2. Fallback: process.env（Vercel / Node.js / Next 的 env 字段编译值）
   try {
     if (typeof process !== 'undefined' && process.env && process.env[key]) {
       return process.env[key];
     }
   } catch (e) {}
-
   return undefined;
 }
 
