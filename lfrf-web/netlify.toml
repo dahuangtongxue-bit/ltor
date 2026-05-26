@@ -4,3 +4,12 @@
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
+
+# 显式指定 API 路由用 Edge Functions（30s 超时，支持 SSE 流式延长）
+# Edge Functions 比标准 Serverless Functions 更适合长响应的 AI 请求
+[functions]
+  node_bundler = "esbuild"
+
+# 增加超时配置（虽然 Edge Function 已经是 30s，但显式声明更稳）
+[functions."*"]
+  included_files = []
