@@ -480,7 +480,11 @@ ${goal}
     callClaude(
       SYSTEM_B(firstPrinciple),
       userMessage,
-      { role: 'critic', maxTokens: 800 }
+      {
+        role: 'critic',
+        maxTokens: 800,
+        onChunk: () => {} // 保活连接，避免 Netlify 10s 超时
+      }
     ).then(bResult => {
       // 跑完才插入 B（默认展开状态，因为之前没占位过）
       setRounds(prev => [...prev, {
@@ -537,13 +541,17 @@ ${goal}
     setLoading(true);
 
     try {
-      // Round 1 - A 主答（非流式，一次性生成）
+      // Round 1 - A 主答（使用 SSE 流式，保活连接避免函数超时，但 UI 一次性显示）
       setCurrentStep(`${providerNames.providerA} 正在深度思考第一轮答案……`);
 
       const aResult = await callClaude(
         SYSTEM_A_INITIAL(firstPrinciple),
         question,
-        { role: 'main', maxTokens: 1500 }
+        {
+          role: 'main',
+          maxTokens: 1500,
+          onChunk: () => {} // 空回调：触发 SSE 流式但不更新 UI，避免 Netlify 10s 超时
+        }
       );
 
       // A 一次性插入到 rounds
@@ -610,7 +618,11 @@ ${goal}
       const aResult = await callClaude(
         SYSTEM_A_REVISE(firstPrinciple),
         `用户的原始问题：\n${question}\n\n以下是你需要回应的最近一轮反馈：\n${historyForA}\n\n请输出修订版答案。新答案必须比上版更好地达成第一性目标。`,
-        { role: 'main', maxTokens: 1500 }
+        {
+          role: 'main',
+          maxTokens: 1500,
+          onChunk: () => {} // 保活连接，避免 Netlify 10s 超时
+        }
       );
 
       // A 修订版一次性插入
@@ -682,7 +694,11 @@ ${firstPrinciple}
 
 风格：深入、有判断力，不必刻意短。`,
         `用户原始问题：\n${question}\n\n讨论历史（最近一轮完整保留，更早内容已节选）：\n${history}\n\n请输出最终收敛答案，重点参考最近一轮的内容，更早内容仅供参考。`,
-        { role: 'synthesizer', maxTokens: 1800 }
+        {
+          role: 'synthesizer',
+          maxTokens: 1800,
+          onChunk: () => {} // 保活连接，避免 Netlify 10s 超时
+        }
       );
 
       // FINAL 一次性插入
