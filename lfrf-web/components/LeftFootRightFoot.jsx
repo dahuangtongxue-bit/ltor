@@ -24,17 +24,33 @@ export default function LeftFootRightFoot() {
   const scrollRef = useRef(null);
   const judgeInputRef = useRef(null);
   const conversationRef = useRef(null);
+  // 流式跟随相关：识别用户是否在向上阅读，避免强制把用户拉到底
+  const userScrolledUpRef = useRef(false); // 用户是否手动滚到了非底部位置
+  const isAutoScrollingRef = useRef(false); // 标记当前 onScroll 是程序触发的（避免被误判为用户滚动）
 
+  // 流式自动跟随：仅当用户在底部（没主动向上滚）时才追底
   useEffect(() => {
     if (!scrollRef.current) return;
-    // 只在 A/FINAL 正在流式输出时跟随滚动；
-    // B 跑完后插入末尾时不要滚（避免强制跳到 B 答案，那应该由用户点 toast 触发）
     const lastRound = rounds[rounds.length - 1];
     const isStreaming = lastRound && lastRound.status === 'streaming';
-    if (isStreaming || currentStep) {
+    if ((isStreaming || currentStep) && !userScrolledUpRef.current) {
+      isAutoScrollingRef.current = true;
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      // 释放标志（next tick 后 onScroll 已经处理完）
+      setTimeout(() => { isAutoScrollingRef.current = false; }, 50);
     }
   }, [rounds, currentStep]);
+
+  // onScroll 监听：判断用户是否在底部
+  const handleScroll = () => {
+    if (!scrollRef.current) return;
+    // 程序触发的滚动直接跳过
+    if (isAutoScrollingRef.current) return;
+    const el = scrollRef.current;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // 80px 容差：用户在最后一屏内就算"跟随"，否则视为主动向上阅读
+    userScrolledUpRef.current = distanceFromBottom > 80;
+  };
 
   // B 提示自动消失：当用户滚动到 B 的位置（可见）时
   useEffect(() => {
@@ -209,9 +225,9 @@ export default function LeftFootRightFoot() {
     rounds.forEach((r) => {
       if (r.role === 'A') lines.push(`## 主答者 A · Round ${r.round} (${r.version})\n${r.content}\n`);
       else if (r.role === 'B') {
-        if (r.status === 'pending') lines.push(`## 审查者 B · Round ${r.round}\n（审查未完成）\n`);
-        else if (r.status === 'failed') lines.push(`## 审查者 B · Round ${r.round}\n（审查失败）\n`);
-        else lines.push(`## 审查者 B · Round ${r.round}\n${r.content}\n`);
+        if (r.status === 'pending') lines.push(`## 评审者 B · Round ${r.round}\n（评审进行中…）\n`);
+        else if (r.status === 'failed') lines.push(`## 评审者 B · Round ${r.round}\n（评审失败）\n`);
+        else lines.push(`## 评审者 B · Round ${r.round}\n${r.content}\n`);
       }
       else if (r.role === 'JUDGE') lines.push(`## 我（裁判）· Round ${r.round}\n${r.content}\n`);
       else if (r.role === 'FINAL') lines.push(`## 最终收敛答案\n${r.content}\n`);
@@ -590,6 +606,16 @@ ${goal}
       ? `用户的问题：\n${question}\n\n这是 A 的修订版答案（${aVersion}）：\n${aContent}\n\n请重点审查：A 是否在向第一性目标真正收敛？是否引入了新问题或新分歧？按格式输出。`
       : `用户的问题是：\n${question}\n\nA 的回答是：\n${aContent}\n\n请按"先发散后收敛"的方式输出你的审查批评，每条都要回答它如何影响第一性目标。`;
 
+    // 立即插入 pending 占位（A 答案下方显示"B 正在评审中..."）
+    setRounds(prev => [...prev, {
+      role: 'B',
+      content: '',
+      round: roundNum,
+      model: providerNames.providerB,
+      status: 'pending',
+      expanded: true,
+    }]);
+
     callClaude(
       SYSTEM_B(firstPrinciple),
       userMessage,
@@ -599,28 +625,22 @@ ${goal}
         onChunk: () => {} // 保活连接，避免 Netlify 10s 超时
       }
     ).then(bResult => {
-      // 跑完才插入 B（默认展开状态，因为之前没占位过）
-      setRounds(prev => [...prev, {
-        role: 'B',
-        content: bResult.text,
-        round: roundNum,
-        model: bResult.modelName,
-        status: 'done',
-        expanded: true,
-      }]);
+      // 把同 roundNum 的 pending 占位 update 成完整 done
+      setRounds(prev => prev.map(r =>
+        (r.role === 'B' && r.round === roundNum && r.status === 'pending')
+          ? { ...r, content: bResult.text, model: bResult.modelName, status: 'done', expanded: true }
+          : r
+      ));
       // 触发右下角 toast 提示（带评级，让 toast 颜色化）
       const rating = parseRating(bResult.text);
       setNewBToast({ roundNum, modelName: bResult.modelName, rating, ts: Date.now() });
     }).catch(err => {
-      // 失败：插入一条 failed 标记（可关闭）
-      setRounds(prev => [...prev, {
-        role: 'B',
-        content: `审查失败：${err.message}`,
-        round: roundNum,
-        model: providerNames.providerB,
-        status: 'failed',
-        dismissed: false,
-      }]);
+      // 失败：把 pending 占位 update 成 failed
+      setRounds(prev => prev.map(r =>
+        (r.role === 'B' && r.round === roundNum && r.status === 'pending')
+          ? { ...r, content: `审查失败：${err.message}`, status: 'failed', dismissed: false }
+          : r
+      ));
     });
   };
 
@@ -667,6 +687,7 @@ ${goal}
         model: providerNames.providerA,
         status: 'streaming',
       }]);
+      userScrolledUpRef.current = false; // 新一轮开始，重置跟随状态
       setCurrentStep('');
       setLoading(false); // A 一开始流式就解锁 UI，让用户看到字逐渐出来
 
@@ -757,6 +778,7 @@ ${goal}
       };
       currentRounds.push(placeholderA);
       setRounds([...currentRounds]);
+      userScrolledUpRef.current = false; // 新一轮 A 修订，重置跟随
       setCurrentStep('');
       setLoading(false); // A 一开始流式就解锁 UI
 
@@ -832,6 +854,7 @@ ${goal}
         model: providerNames.providerA,
         status: 'streaming',
       }]);
+      userScrolledUpRef.current = false; // 综合开始，重置跟随
       setCurrentStep('');
       setLoading(false); // 流式开始就解锁 UI
 
@@ -1210,7 +1233,7 @@ ${firstPrinciple}
         </div>
 
         {/* 对话区 */}
-        <div ref={scrollRef} className="bg-white border-x border-stone-200 max-h-[60vh] overflow-y-auto relative">
+        <div ref={scrollRef} onScroll={handleScroll} className="bg-white border-x border-stone-200 max-h-[60vh] overflow-y-auto relative">
           <div ref={conversationRef}>
           {rounds.map((r, idx) => {
             if (r.role === 'A') {
@@ -1241,9 +1264,21 @@ ${firstPrinciple}
               );
             }
             if (r.role === 'B') {
-              // 新模型：B 只在跑完才插入 rounds，所以没有 pending 状态
-              // status: 'done' （默认展开） / 'failed'（红色条，可关闭）
+              // status: 'pending'（B 还在评审）/ 'done'（评审完成）/ 'failed'（评审失败）
               const status = r.status || 'done';
+
+              // pending：B 还在后台跑，A 答案下方显示一个轻量占位条
+              if (status === 'pending') {
+                return (
+                  <div key={idx} className="border-b border-stone-100 px-5 py-3 bg-stone-50/60">
+                    <div className="flex items-center gap-2.5 text-xs text-stone-500">
+                      <span className="w-5 h-5 rounded-md bg-stone-200 text-stone-600 flex items-center justify-center font-medium text-[11px]">B</span>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-stone-400" />
+                      <span>{r.model || providerNames.providerB} 正在评审中……</span>
+                    </div>
+                  </div>
+                );
+              }
 
               // failed：B 失败了，可关闭
               if (status === 'failed') {
@@ -1253,7 +1288,7 @@ ${firstPrinciple}
                     <div className="flex items-center justify-between gap-3 text-xs text-red-700">
                       <div className="flex items-center gap-2">
                         <AlertTriangle className="w-3.5 h-3.5" />
-                        <span>审查者 B 审查未完成（可忽略，不影响后续讨论）</span>
+                        <span>评审者 B 评审未完成（可忽略，不影响后续讨论）</span>
                       </div>
                       <button
                         onClick={() => dismissFailedB(r.round)}
