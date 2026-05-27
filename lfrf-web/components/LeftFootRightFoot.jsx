@@ -541,8 +541,20 @@ ${goal}
     setLoading(true);
 
     try {
-      // Round 1 - A 主答（使用 SSE 流式，保活连接避免函数超时，但 UI 一次性显示）
+      // Round 1 - A 主答（SSE 流式，逐字显示）
       setCurrentStep(`${providerNames.providerA} 正在深度思考第一轮答案……`);
+
+      // 立刻插入一个 streaming 状态的空 A 卡片，后续 onChunk 会实时更新它的 content
+      setRounds([{
+        role: 'A',
+        content: '',
+        version: 'v1',
+        round: 1,
+        model: providerNames.providerA,
+        status: 'streaming',
+      }]);
+      setCurrentStep('');
+      setLoading(false); // A 一开始流式就解锁 UI，让用户看到字逐渐出来
 
       const aResult = await callClaude(
         SYSTEM_A_INITIAL(firstPrinciple),
@@ -550,26 +562,31 @@ ${goal}
         {
           role: 'main',
           maxTokens: 1500,
-          onChunk: () => {} // 空回调：触发 SSE 流式但不更新 UI，避免 Netlify 10s 超时
+          onChunk: (delta, accumulated) => {
+            // 实时把累积内容写回 rounds
+            setRounds(prev => prev.map(r =>
+              (r.role === 'A' && r.round === 1 && r.status === 'streaming')
+                ? { ...r, content: accumulated }
+                : r
+            ));
+          },
         }
       );
 
-      // A 一次性插入到 rounds
-      setRounds([{
-        role: 'A',
-        content: aResult.text,
-        version: 'v1',
-        round: 1,
-        model: aResult.modelName,
-      }]);
-      setCurrentStep('');
-      setLoading(false); // A 出来后立即解锁 UI
+      // A 完成：清掉 streaming 状态，更新 modelName
+      setRounds(prev => prev.map(r =>
+        (r.role === 'A' && r.round === 1 && r.status === 'streaming')
+          ? { ...r, content: aResult.text, model: aResult.modelName || r.model, status: undefined }
+          : r
+      ));
 
       // B 后台静默跑（不 await，不阻塞）
       triggerBReview(aResult.text, 1, false);
     } catch (e) {
       setError(e.message);
       setLastFailedAction(() => runDebate);
+      // 清理 streaming 状态的半截 A 卡片
+      setRounds(prev => prev.filter(r => !(r.role === 'A' && r.status === 'streaming')));
       setStage('confirming-goal');
       setCurrentStep('');
       setLoading(false);
@@ -615,27 +632,42 @@ ${goal}
       setCurrentStep(`Round ${nextRoundNum} — ${providerNames.providerA} 正在深度修订答案……`);
       const version = `v${currentRounds.filter(r => r.role === 'A').length + 1}`;
 
+      // 立刻插入 streaming 状态的 A 修订占位卡片
+      const placeholderA = {
+        role: 'A',
+        content: '',
+        version,
+        round: nextRoundNum,
+        model: providerNames.providerA,
+        status: 'streaming',
+      };
+      currentRounds.push(placeholderA);
+      setRounds([...currentRounds]);
+      setCurrentStep('');
+      setLoading(false); // A 一开始流式就解锁 UI
+
       const aResult = await callClaude(
         SYSTEM_A_REVISE(firstPrinciple),
         `用户的原始问题：\n${question}\n\n以下是你需要回应的最近一轮反馈：\n${historyForA}\n\n请输出修订版答案。新答案必须比上版更好地达成第一性目标。`,
         {
           role: 'main',
           maxTokens: 1500,
-          onChunk: () => {} // 保活连接，避免 Netlify 10s 超时
+          onChunk: (delta, accumulated) => {
+            setRounds(prev => prev.map(r =>
+              (r.role === 'A' && r.round === nextRoundNum && r.status === 'streaming')
+                ? { ...r, content: accumulated }
+                : r
+            ));
+          },
         }
       );
 
-      // A 修订版一次性插入
-      currentRounds.push({
-        role: 'A',
-        content: aResult.text,
-        version,
-        round: nextRoundNum,
-        model: aResult.modelName,
-      });
-      setRounds([...currentRounds]);
-      setCurrentStep('');
-      setLoading(false);
+      // A 完成：清掉 streaming 状态
+      setRounds(prev => prev.map(r =>
+        (r.role === 'A' && r.round === nextRoundNum && r.status === 'streaming')
+          ? { ...r, content: aResult.text, model: aResult.modelName || r.model, status: undefined }
+          : r
+      ));
 
       // B 二审后台跑（不 await）
       triggerBReview(aResult.text, nextRoundNum, true, version);
@@ -643,6 +675,8 @@ ${goal}
       setError(e.message);
       setCurrentStep('');
       setLoading(false);
+      // 清理半截 streaming 的 A
+      setRounds(prev => prev.filter(r => !(r.role === 'A' && r.status === 'streaming')));
       // 重试：保留当前 rounds（含已添加的 judge），重新跑剩余流程
       setLastFailedAction(() => submitJudgeAndContinue);
     }
@@ -677,6 +711,16 @@ ${goal}
       };
       const history = buildCompactHistory();
 
+      // 立刻插入 streaming 状态的 FINAL 占位卡片
+      setRounds(prev => [...prev, {
+        role: 'FINAL',
+        content: '',
+        model: providerNames.providerA,
+        status: 'streaming',
+      }]);
+      setCurrentStep('');
+      setLoading(false); // 流式开始就解锁 UI
+
       const finalResult = await callClaude(
         `你是一个综合者。基于 A 和 B 的多轮对抗讨论以及用户的裁判介入，输出最终的、平衡的答案。
 
@@ -697,22 +741,28 @@ ${firstPrinciple}
         {
           role: 'synthesizer',
           maxTokens: 1800,
-          onChunk: () => {} // 保活连接，避免 Netlify 10s 超时
+          onChunk: (delta, accumulated) => {
+            setRounds(prev => prev.map(r =>
+              (r.role === 'FINAL' && r.status === 'streaming')
+                ? { ...r, content: accumulated }
+                : r
+            ));
+          },
         }
       );
 
-      // FINAL 一次性插入
-      setRounds(prev => [...prev, {
-        role: 'FINAL',
-        content: finalResult.text,
-        model: finalResult.modelName,
-      }]);
-      setCurrentStep('');
+      // FINAL 完成：清掉 streaming 状态
+      setRounds(prev => prev.map(r =>
+        (r.role === 'FINAL' && r.status === 'streaming')
+          ? { ...r, content: finalResult.text, model: finalResult.modelName || r.model, status: undefined }
+          : r
+      ));
       setStage('done');
-      setLoading(false);
     } catch (e) {
       setError(e.message);
       setCurrentStep('');
+      // 清理半截 streaming 的 FINAL
+      setRounds(prev => prev.filter(r => !(r.role === 'FINAL' && r.status === 'streaming')));
       setLastFailedAction(() => converge);
       setLoading(false);
     }
@@ -1059,12 +1109,19 @@ ${firstPrinciple}
                         主答者 A
                         <span className="text-[10px] px-1.5 py-0.5 bg-purple-100 text-purple-800 rounded font-medium">{r.model || providerNames.providerA}</span>
                       </div>
-                      <div className="text-xs text-stone-500">Round {r.round} · {r.version} · 深度回答</div>
+                      <div className="text-xs text-stone-500">
+                        Round {r.round} · {r.version} · {r.status === 'streaming' ? '正在生成…' : '深度回答'}
+                      </div>
                     </div>
                     <span className="text-xs px-2 py-1 bg-purple-50 text-purple-800 rounded-full border border-purple-200">{r.version}</span>
                   </div>
                   <div className="text-sm text-stone-700 leading-relaxed pl-10 select-text">
-                    {renderMarkdown(r.content)}
+                    {r.content
+                      ? renderMarkdown(r.content)
+                      : <span className="text-stone-400 italic">思考中…</span>}
+                    {r.status === 'streaming' && (
+                      <span className="inline-block w-[2px] h-4 bg-purple-500 ml-0.5 align-middle animate-pulse" />
+                    )}
                   </div>
                 </div>
               );
@@ -1160,11 +1217,18 @@ ${firstPrinciple}
                         最终收敛答案
                         <span className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-800 rounded font-medium">{r.model || providerNames.providerA}</span>
                       </div>
-                      <div className="text-xs text-green-700">综合双方观点 + 你的裁判意见</div>
+                      <div className="text-xs text-green-700">
+                        {r.status === 'streaming' ? '综合者正在生成…' : '综合双方观点 + 你的裁判意见'}
+                      </div>
                     </div>
                   </div>
                   <div className="text-sm text-stone-800 leading-relaxed pl-10 select-text">
-                    {renderMarkdown(r.content)}
+                    {r.content
+                      ? renderMarkdown(r.content)
+                      : <span className="text-stone-400 italic">综合中…</span>}
+                    {r.status === 'streaming' && (
+                      <span className="inline-block w-[2px] h-4 bg-green-600 ml-0.5 align-middle animate-pulse" />
+                    )}
                   </div>
                 </div>
               );
