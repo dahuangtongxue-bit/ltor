@@ -26,7 +26,12 @@ export default function LeftFootRightFoot() {
   const conversationRef = useRef(null);
 
   useEffect(() => {
-    if (scrollRef.current) {
+    if (!scrollRef.current) return;
+    // 只在 A/FINAL 正在流式输出时跟随滚动；
+    // B 跑完后插入末尾时不要滚（避免强制跳到 B 答案，那应该由用户点 toast 触发）
+    const lastRound = rounds[rounds.length - 1];
+    const isStreaming = lastRound && lastRound.status === 'streaming';
+    if (isStreaming || currentStep) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [rounds, currentStep]);
