@@ -129,6 +129,80 @@ export default function LeftFootRightFoot() {
     }, 50);
   };
 
+  // 从 B 的回答内容里 parse 出评级（A+/A/B/C），找不到则返回 null
+  // B 的标准输出第一行格式：**评级：A+** ｜ **总评**：...
+  const parseRating = (content) => {
+    if (!content) return null;
+    const match = content.match(/\*\*评级[：:]\s*([ABC]\+?)\s*\*\*/);
+    return match ? match[1] : null;
+  };
+
+  // 评级 → Tailwind class 完整映射（必须是完整字符串，JIT 才能识别）
+  // A+ 翠绿（赞美）/ A 天蓝（认可）/ B 琥珀（中等批评）/ C 玫红（重大缺陷）
+  const ratingStyles = {
+    'A+': {
+      cardBg: 'bg-emerald-50/40',
+      cardBorder: 'border-emerald-100',
+      dotBg: 'bg-emerald-100',
+      dotText: 'text-emerald-800',
+      titleText: 'text-emerald-900',
+      subText: 'text-emerald-700',
+      tag: 'bg-emerald-100 text-emerald-800',
+      toastBg: 'bg-emerald-600 hover:bg-emerald-700',
+      cursor: 'bg-emerald-500',
+      label: 'A+',
+    },
+    'A': {
+      cardBg: 'bg-sky-50/40',
+      cardBorder: 'border-sky-100',
+      dotBg: 'bg-sky-100',
+      dotText: 'text-sky-800',
+      titleText: 'text-sky-900',
+      subText: 'text-sky-700',
+      tag: 'bg-sky-100 text-sky-800',
+      toastBg: 'bg-sky-600 hover:bg-sky-700',
+      cursor: 'bg-sky-500',
+      label: 'A',
+    },
+    'B': {
+      cardBg: 'bg-amber-50/40',
+      cardBorder: 'border-amber-100',
+      dotBg: 'bg-amber-100',
+      dotText: 'text-amber-800',
+      titleText: 'text-amber-900',
+      subText: 'text-amber-700',
+      tag: 'bg-amber-100 text-amber-800',
+      toastBg: 'bg-amber-600 hover:bg-amber-700',
+      cursor: 'bg-amber-500',
+      label: 'B',
+    },
+    'C': {
+      cardBg: 'bg-rose-50/40',
+      cardBorder: 'border-rose-100',
+      dotBg: 'bg-rose-100',
+      dotText: 'text-rose-800',
+      titleText: 'text-rose-900',
+      subText: 'text-rose-700',
+      tag: 'bg-rose-100 text-rose-800',
+      toastBg: 'bg-rose-600 hover:bg-rose-700',
+      cursor: 'bg-rose-500',
+      label: 'C',
+    },
+  };
+  // 默认（评级解析失败时回退到原 B 的橙色）
+  const defaultBStyle = {
+    cardBg: 'bg-white',
+    cardBorder: 'border-stone-100',
+    dotBg: 'bg-orange-100',
+    dotText: 'text-orange-800',
+    titleText: 'text-stone-900',
+    subText: 'text-stone-500',
+    tag: 'bg-orange-100 text-orange-800',
+    toastBg: 'bg-orange-600 hover:bg-orange-700',
+    cursor: 'bg-orange-500',
+    label: '',
+  };
+
   const copyEntireConversation = () => {
     const lines = [`# 问题\n${question}\n`];
     if (firstPrinciple) lines.push(`# 第一性目标\n${firstPrinciple}\n`);
@@ -394,62 +468,96 @@ ${goal}
 **置信度评估**：XX%
 **对第一性目标的服务方式**：（1 句话）`;
 
-  const SYSTEM_A_REVISE = (goal) => `你是"主答者 A"。审查者 B 对你的上一版答案提出了批评，用户作为裁判可能也给了介入意见。
+  const SYSTEM_A_REVISE = (goal) => `你是"主答者 A"。评审者 B 已经对你的上一版答案给出了评级（A+/A/B/C 四档）和审视意见，用户作为裁判可能也给了介入意见。
 请精炼地重写你的答案，给出一个更对齐第一性目标的版本。
 
 【第一性目标】（修订必须更好地服务于此）：
 ${goal}
 
 修订原则：
-1. 不是小修小补，而是基于反馈做实质性调整——但保持精炼
-2. 明确说明你改了什么、为什么改（简短，3-5 点即可）
-3. 如果某些批评你不接受，明确说明并给出理由
-4. **控制在 900 字以内**，深度优先于篇幅
+1. 优先关注 B 的评级和总评——评级低（B/C）说明有重大问题需要正面回应；评级高（A+/A）说明只需打磨边角
+2. 不是小修小补，而是基于反馈做实质性调整——但保持精炼
+3. 明确说明你改了什么、为什么改（简短，3-5 点即可）
+4. 如果某些批评你不接受，明确说明并给出理由
+5. **控制在 900 字以内**，深度优先于篇幅
 
 输出结构（用 Markdown）：
 **修订后的核心判断**
 **相比上版的关键改动**（要点形式，说明改了什么、为什么改）
 **展开分析**（深度回答，含子小节）
-**对批评的逐条回应**（接受 / 不接受 + 理由）
+**对评审意见的逐条回应**（接受 / 不接受 + 理由）
 **剩余的不确定性**
 **置信度评估**：XX%
 **对第一性目标的服务方式**：（1 句话）`;
 
-  // 角色 B 的 system prompt — 审查者，强制批判，但锚定第一性目标
-  const SYSTEM_B = (goal) => `你是"审查者 B"。你的任务是找出主答者 A 的回答中影响"第一性目标"达成的关键问题。
+  // 角色 B 的 system prompt — 独立评审者，先评级后批评，严格倾向
+  const SYSTEM_B = (goal) => `你是"独立评审者 B"。你的任务是审视主答者 A 的回答，对它做出公允但严格的评级，并给出有判断力的审视意见。
 
-【第一性目标】（你的北极星，所有批评必须最终服务于此）：
+【第一性目标】（你的北极星，评级和批评都必须最终服务于此）：
 ${goal}
 
-工作方法（先发散，后收敛）：
-第一步：发散思考——大胆提出 A 可能没想到的视角、风险、隐藏假设、跨领域类比。不要被 A 的框架限制。
-第二步：收敛筛选——只保留那些"如果忽略就会显著影响第一性目标达成"的问题。次要的吹毛求疵全部舍弃。
-第三步：每条批评结尾必须用一行说明"这如何影响第一性目标"。
+---
 
-强制要求：
-- 必须找出 3 个核心问题（精选，不要凑数）
-- 每个问题必须用以下三个类别之一标注：[事实存疑] / [忽略视角] / [逻辑漏洞]
-- 站在用户利益角度，提出 A 可能没考虑到的关键盲点
-- 语言精炼，每条只说重点
+【评级体系】（必须严格——评级通货膨胀会让你失去价值）
 
-输出格式（用 Markdown，控制在 600 字以内）：
-**对齐第一性目标的总评：** （1 句话）
+**A+ 级**（稀有，默认不要给）
+- 同时满足 3 条硬性条件：（1）事实准确无误；（2）覆盖了与第一性目标相关的所有关键视角；（3）直击目标，没有跑题或冗余
+- 你需要在内心反复确认"挑不出实质问题"才能给 A+
+- 大多数答案不配 A+
 
-**问题清单：**
+**A 级**（整体扎实）
+- 主体正确、对齐目标，但存在 1-2 个值得讨论的边角问题或可补充的视角
+
+**B 级**（方向对但有薄弱点）—— 这是你的默认档位
+- 答案大体对，但有 2-3 个明显的薄弱点：可能某个视角缺失，某个论证不够，某个事实可疑
+- 如果你挑不出实质问题，但也没把握给 A，**默认就给 B**——这比通货膨胀给 A 更诚实
+
+**C 级**（有重大缺陷）
+- 存在以下任一致命问题：事实错误、严重逻辑漏洞、严重遗漏关键视角、跑题偏离第一性目标
+- 给 C 级时你必须在总评里明确说"这个答案需要重做"
+
+【评级倾向规则】（必读）
+- 你的默认档位是 **B 级**——挑不出实质问题但也没把握给 A，就给 B
+- A+ 级要稀有，需要主动论证"为什么挑不出问题"
+- 看到答案的第一反应不应该是"找几个温和的补充"——而应该是"这答案能不能对得起第一性目标"
+
+---
+
+【输出格式】（严格遵守，前端需要解析）
+
+第一行必须是这个固定格式（前端会从这里提取评级）：
+\`\`\`
+**评级：[A+ / A / B / C]** ｜ **总评**：（1 句话，说明评级的核心理由，C 级时必须明确说"这个答案需要重做"）
+\`\`\`
+
+然后空一行，按以下结构输出：
+
+**A 的核心强项：**
+- （承认 A 答得好的地方，1-2 条，要具体不要空话）
+- （如果是 C 级且实在没有强项，可以写"暂未发现实质强项"）
+
+**审视意见：**
 
 **1. [类别] 标题（简短有力）**
-（2 句具体说明，直击要害）
+（2 句具体说明，直击要害，不要客套）
 *对第一性目标的影响：* （1 句话）
 
 **2. [类别] 标题**
-（2 句具体说明）
-*对第一性目标的影响：* （1 句话）
+（同上结构）
 
-**3. [类别] 标题**
-（2 句具体说明）
-*对第一性目标的影响：* （1 句话）
+**3.（仅 B/C 级需要第 3 条；A+/A 级允许只给 1-2 条）**
 
-直接进入批评，不要客套，不要总结结尾。`;
+【类别选择】
+- A+/A 级允许用：[可补充视角] / [可强化论证] / [可深入边角]
+- B/C 级必须用：[事实存疑] / [忽略视角] / [逻辑漏洞]
+
+【数量规则】
+- A+ 级：1 条审视意见（轻度建议）
+- A 级：1-2 条
+- B 级：2-3 条
+- C 级：3 条（必须 3 条，因为是重大缺陷）
+
+控制总长在 600 字以内，直接进入评级，不要客套，不要总结结尾。`;
 
   // 第一步：从问题提取第一性目标，进入确认页
   const extractGoal = async () => {
@@ -500,8 +608,9 @@ ${goal}
         status: 'done',
         expanded: true,
       }]);
-      // 触发右下角 toast 提示
-      setNewBToast({ roundNum, modelName: bResult.modelName, ts: Date.now() });
+      // 触发右下角 toast 提示（带评级，让 toast 颜色化）
+      const rating = parseRating(bResult.text);
+      setNewBToast({ roundNum, modelName: bResult.modelName, rating, ts: Date.now() });
     }).catch(err => {
       // 失败：插入一条 failed 标记（可关闭）
       setRounds(prev => [...prev, {
@@ -938,10 +1047,10 @@ ${firstPrinciple}
                 <span className="text-stone-500">{providerNames.providerA} · 深度回答</span>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="px-2 py-1 bg-orange-100 text-orange-800 rounded font-medium">审查 B</span>
-                <span className="text-stone-500">{providerNames.providerB} · 强制批判</span>
+                <span className="px-2 py-1 bg-orange-100 text-orange-800 rounded font-medium">评审 B</span>
+                <span className="text-stone-500">{providerNames.providerB} · 独立评级</span>
               </div>
-              <div className="text-stone-400 pt-1 border-t border-stone-100">跨家族对抗 · 你随时可作为裁判介入</div>
+              <div className="text-stone-400 pt-1 border-t border-stone-100">A+ / A / B / C 四档评级 · 你随时可作为裁判介入</div>
               {remaining !== null && (
                 <div className="text-stone-500 pt-1">你今天还剩 <span className="font-medium text-stone-700">{remaining}</span> 次调用</div>
               )}
@@ -1157,19 +1266,27 @@ ${firstPrinciple}
                 );
               }
 
+              // 解析评级，决定颜色
+              const rating = parseRating(r.content);
+              const style = (rating && ratingStyles[rating]) || defaultBStyle;
+
               // done 折叠状态（用户主动收起后）
               if (!r.expanded) {
                 return (
-                  <div key={idx} className="border-b border-stone-100 bg-orange-50/30">
+                  <div key={idx} className={`border-b border-stone-100 ${style.cardBg}`}>
                     <button
                       onClick={() => toggleBExpanded(r.round)}
-                      className="w-full px-5 py-3 flex items-center justify-center gap-3 text-xs text-orange-800 hover:bg-orange-50/60 transition group"
+                      className={`w-full px-5 py-3 flex items-center justify-center gap-3 text-xs ${style.dotText} hover:opacity-80 transition group`}
                     >
-                      <span className="text-orange-300">···</span>
-                      <span className="w-5 h-5 rounded-md bg-orange-100 text-orange-800 flex items-center justify-center font-medium text-[11px]">B</span>
-                      <span className="font-medium">{r.model || providerNames.providerB} 已给出审查意见</span>
-                      <ChevronRight className="w-3.5 h-3.5 text-orange-600 group-hover:translate-x-0.5 transition" />
-                      <span className="text-orange-300">···</span>
+                      <span className="opacity-30">···</span>
+                      <span className={`w-5 h-5 rounded-md ${style.dotBg} ${style.dotText} flex items-center justify-center font-medium text-[11px]`}>B</span>
+                      <span className="font-medium">
+                        {r.model || providerNames.providerB}
+                        {rating && <span className={`ml-1.5 px-1.5 py-0.5 rounded ${style.tag} text-[10px] font-semibold`}>{rating}</span>}
+                        <span className="ml-1.5">已给出审视意见</span>
+                      </span>
+                      <ChevronRight className={`w-3.5 h-3.5 ${style.subText} group-hover:translate-x-0.5 transition`} />
+                      <span className="opacity-30">···</span>
                     </button>
                   </div>
                 );
@@ -1177,19 +1294,20 @@ ${firstPrinciple}
 
               // done 展开（默认）：完整卡片，附带折叠按钮
               return (
-                <div key={idx} data-source-label={`B 的 Round ${r.round} 审查`} className="border-b border-stone-100 p-5 bg-orange-50/30">
+                <div key={idx} data-source-label={`B 的 Round ${r.round} 审查`} className={`border-b border-stone-100 p-5 ${style.cardBg}`}>
                   <div className="flex items-center gap-2 mb-3">
-                    <div className="w-8 h-8 rounded-lg bg-orange-100 text-orange-800 flex items-center justify-center text-sm font-medium">B</div>
+                    <div className={`w-8 h-8 rounded-lg ${style.dotBg} ${style.dotText} flex items-center justify-center text-sm font-medium`}>B</div>
                     <div className="flex-1">
                       <div className="text-sm font-medium flex items-center gap-2">
-                        审查者 B
-                        <span className="text-[10px] px-1.5 py-0.5 bg-orange-100 text-orange-800 rounded font-medium">{r.model || providerNames.providerB}</span>
+                        独立评审 B
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${style.tag}`}>{r.model || providerNames.providerB}</span>
+                        {rating && <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${style.tag}`}>评级 {rating}</span>}
                       </div>
-                      <div className="text-xs text-stone-500">Round {r.round} · 强制批判</div>
+                      <div className={`text-xs ${style.subText}`}>Round {r.round} · {rating ? `${rating} 级评审` : '独立评审'}</div>
                     </div>
                     <button
                       onClick={() => toggleBExpanded(r.round)}
-                      className="text-xs text-stone-500 hover:text-stone-900 px-2 py-1 rounded hover:bg-orange-100/50 transition"
+                      className="text-xs text-stone-500 hover:text-stone-900 px-2 py-1 rounded hover:bg-white/60 transition"
                     >
                       收起
                     </button>
@@ -1287,11 +1405,17 @@ ${firstPrinciple}
                   }
                 });
               }}
-              className="absolute bottom-4 right-4 z-20 bg-orange-600 text-white text-xs px-3.5 py-2 rounded-full shadow-lg flex items-center gap-2 hover:bg-orange-700 transition animate-bounce-once"
+              className={`absolute bottom-4 right-4 z-20 ${((newBToast.rating && ratingStyles[newBToast.rating]) || defaultBStyle).toastBg} text-white text-xs px-3.5 py-2 rounded-full shadow-lg flex items-center gap-2 transition animate-bounce-once`}
               style={{ animation: 'fadeInUp 0.3s ease-out' }}
             >
               <span className="w-4 h-4 rounded-md bg-white/20 flex items-center justify-center font-medium text-[10px]">B</span>
-              {newBToast.modelName || providerNames.providerB} 已给出审查意见
+              <span>
+                {newBToast.modelName || providerNames.providerB}
+                {newBToast.rating && (
+                  <span className="ml-1.5 px-1.5 py-0.5 bg-white/25 rounded text-[10px] font-bold">{newBToast.rating}</span>
+                )}
+                <span className="ml-1.5">已给出审视意见</span>
+              </span>
               <ChevronDown className="w-3.5 h-3.5" />
             </button>
           )}
