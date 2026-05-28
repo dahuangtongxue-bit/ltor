@@ -26,6 +26,7 @@ export default function LeftFootRightFoot() {
   // 上传的背景文档：{ name, text, truncated, charCount, kind } | null
   const [doc, setDoc] = useState(null);
   const [docParsing, setDocParsing] = useState(false); // 文件解析中
+  const [dragging, setDragging] = useState(false); // 是否正在拖拽文件悬停
   const fileInputRef = useRef(null);
   const convergeAbortRef = useRef(null); // 整合的 AbortController，用于中止
   const scrollRef = useRef(null);
@@ -612,6 +613,27 @@ ${goal}
     handleFileSelect(file);
   };
 
+  // 拖拽上传
+  const onDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dragging) setDragging(true);
+  };
+  const onDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // 只有真正离开区域才取消（避免在子元素间移动时闪烁）
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setDragging(false);
+  };
+  const onDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragging(false);
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file) handleFileSelect(file);
+  };
+
   const removeDoc = () => {
     setDoc(null);
     setError('');
@@ -1147,7 +1169,20 @@ ${firstPrinciple}
             <p className="text-stone-600 text-sm">两个 AI 讨论博弈，给你更靠谱的答案</p>
           </div>
 
-          <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-sm">
+          <div
+            className="bg-white rounded-2xl border border-stone-200 p-6 shadow-sm relative"
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop}
+          >
+            {/* 拖拽悬停蒙层 */}
+            {dragging && (
+              <div className="absolute inset-0 z-10 rounded-2xl bg-blue-50/95 border-2 border-dashed border-blue-400 flex flex-col items-center justify-center gap-2 pointer-events-none">
+                <Paperclip className="w-8 h-8 text-blue-500" />
+                <div className="text-sm font-medium text-blue-700">松手即可上传文档</div>
+                <div className="text-xs text-blue-500">Word / Excel / PDF / 文本</div>
+              </div>
+            )}
             <label className="block text-sm font-medium text-stone-700 mb-2">提出一个值得推敲的问题</label>
             <textarea
               value={question}
@@ -1172,7 +1207,7 @@ ${firstPrinciple}
                   className="w-full flex items-center justify-center gap-2 py-2.5 border border-dashed border-stone-300 rounded-lg text-xs text-stone-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/40 transition"
                 >
                   <Paperclip className="w-3.5 h-3.5" />
-                  上传背景资料（可选）· Word / Excel / PDF / 文本
+                  上传或拖入背景资料（可选）· Word / Excel / PDF / 文本
                 </button>
               )}
               {docParsing && (
