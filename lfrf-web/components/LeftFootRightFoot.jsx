@@ -21,6 +21,8 @@ export default function LeftFootRightFoot() {
   const [selection, setSelection] = useState(null); // {text, x, y, sourceLabel}
   const [lastFailedAction, setLastFailedAction] = useState(null); // function to retry
   const [newBToast, setNewBToast] = useState(null); // {roundNum, modelName, ts} — B 跑完后右下角浮动提示
+  const [converging, setConverging] = useState(false); // 是否正在整合（用于按钮变"停止整合"）
+  const convergeAbortRef = useRef(null); // 整合的 AbortController，用于中止
   const scrollRef = useRef(null);
   const judgeInputRef = useRef(null);
   const conversationRef = useRef(null);
@@ -230,7 +232,7 @@ export default function LeftFootRightFoot() {
         else lines.push(`## 评审者 B · Round ${r.round}\n${r.content}\n`);
       }
       else if (r.role === 'JUDGE') lines.push(`## 我（裁判）· Round ${r.round}\n${r.content}\n`);
-      else if (r.role === 'FINAL') lines.push(`## 最终收敛答案\n${r.content}\n`);
+      else if (r.role === 'FINAL') lines.push(`## 整合者 · 综合答案\n${r.content}\n`);
     });
     navigator.clipboard.writeText(lines.join('\n'));
     setCopied(true);
@@ -245,7 +247,7 @@ export default function LeftFootRightFoot() {
   // onChunk(delta) 每收到一段新内容就调用一次
   // 返回 { text, modelName, providerLabel } —— text 是完整累积的文本
   const callClaudeStream = async (systemPrompt, userMessage, opts) => {
-    const { role, maxTokens, onChunk } = opts;
+    const { role, maxTokens, onChunk, signal } = opts;
     const maxRetries = 1; // 流式重试一次就够，避免重复触发 onChunk
     let lastError = null;
 
@@ -258,6 +260,7 @@ export default function LeftFootRightFoot() {
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal, // 支持外部中止
           body: JSON.stringify({
             password,
             role,
@@ -357,11 +360,11 @@ export default function LeftFootRightFoot() {
 
   // 调用后端代理。如果传入 onChunk 则走流式（SSE），否则走非流式
   const callClaude = async (systemPrompt, userMessage, opts = {}) => {
-    const { role = 'main', maxTokens = 1500, onChunk } = opts;
+    const { role = 'main', maxTokens = 1500, onChunk, signal } = opts;
 
     // 如果调用方提供了 onChunk 回调，走流式分支
     if (onChunk) {
-      return callClaudeStream(systemPrompt, userMessage, { role, maxTokens, onChunk });
+      return callClaudeStream(systemPrompt, userMessage, { role, maxTokens, onChunk, signal });
     }
 
     // 否则走原有非流式逻辑
@@ -821,11 +824,18 @@ ${goal}
   const converge = async () => {
     setLoading(true);
     setError('');
+    setLastFailedAction(null);
+
+    // 建立 AbortController，允许用户中途停止整合
+    const controller = new AbortController();
+    convergeAbortRef.current = controller;
+    setConverging(true);
+
     try {
-      setCurrentStep('正在生成最终收敛答案……');
+      setCurrentStep('整合者正在综合双方答案……');
 
       // 智能压缩历史：最近一轮保留完整内容，更早的内容做摘要级截断
-      // 跳过 pending/failed 状态的 B（用户在 B 没跑完时点了收敛，或 B 失败了）
+      // 跳过 pending/failed 状态的 B（用户在 B 没跑完时点了整合，或 B 失败了）
       const buildCompactHistory = () => {
         const validRounds = rounds.filter(r => {
           if (r.role === 'B' && (r.status === 'pending' || r.status === 'failed')) return false;
@@ -840,7 +850,7 @@ ${goal}
           const truncated = (r.content || '').length > cap ? text + '\n......（节选）' : text;
 
           if (r.role === 'A') return `[A 的 ${r.version} 答案${isLastRound ? '·最终版本' : ''}]\n${truncated}`;
-          if (r.role === 'B') return `[B 的审查批评${isLastRound ? '·最近一次' : ''}]\n${truncated}`;
+          if (r.role === 'B') return `[B 的评审意见${isLastRound ? '·最近一次' : ''}]\n${truncated}`;
           if (r.role === 'JUDGE') return `[用户裁判介入]\n${truncated}`;
           return '';
         }).join('\n\n---\n\n');
@@ -854,30 +864,36 @@ ${goal}
         model: providerNames.providerA,
         status: 'streaming',
       }]);
-      userScrolledUpRef.current = false; // 综合开始，重置跟随
+      userScrolledUpRef.current = false; // 整合开始，重置跟随
       setCurrentStep('');
       setLoading(false); // 流式开始就解锁 UI
 
       const finalResult = await callClaude(
-        `你是一个综合者。基于 A 和 B 的多轮对抗讨论以及用户的裁判介入，输出最终的、平衡的答案。
+        `你是一位"整合者"。你的职责不是裁判 A 和 B 谁对谁错，而是站在比双方都更高的视角，用第一性原理思考，把 A 的深度和 B 的批判性洞察融合成一个比任何单方都更好的完整答案。
 
-【第一性目标】（最终答案必须最好地服务于此）：
+【第一性目标】（你的最高北极星，整个答案必须服务于此，不要被 A/B 的具体表述束缚）：
 ${firstPrinciple}
 
-格式：
-**最终结论**：（明确的、综合双方意见后的结论，必须直接回应第一性目标）
-**关键支持理由**：（3-5 条，每条简要展开）
-**A 和 B 的核心分歧及裁决**：（说明 A 和 B 在哪里仍有分歧，以及作为综合者你倾向哪边、为什么）
-**对第一性目标的达成度评估**：（1-2 句，说明这个答案在多大程度上回答了用户最深层的需求）
+【核心工作方式】
+1. 回到第一性：先问"用户真正要解决的问题是什么"，从根本需求出发组织答案，而不是简单拼接 A 和 B 的观点。
+2. 融合为主：把 A 的论证和 B 的洞察看作同一个答案的不同侧面，主动寻找并整合它们的共识与互补之处，形成一个连贯、统一的回答。
+3. 分歧为辅：只有当 A 和 B 存在"会实质影响用户决策"的分歧时，才单独点出——而且不要替用户选边，而是说清楚"这个权衡取决于什么"，把决策依据交给用户。无关紧要的措辞差异不要提。
+
+【输出格式】
+**综合结论**：（站在第一性目标的高度，给出一个直接、完整、可用的结论——这是融合后的答案，不是"谁赢了"）
+**关键要点**：（3-5 条，把 A 的深度和 B 的洞察融合进去，每条简要展开）
+**需要你自己权衡的地方**（可选，仅当存在影响决策的实质分歧时才写）：（说清楚权衡的两端分别适合什么情况，由用户根据自身处境判断，不替用户拍板）
+**对第一性目标的达成度**：（1-2 句）
 **剩余的不确定性**
 **置信度评估**：XX%
-**给用户的具体行动建议**：（2-4 条可执行的下一步）
+**给你的下一步建议**：（2-4 条可执行的行动）
 
-风格：深入、有判断力，不必刻意短。`,
-        `用户原始问题：\n${question}\n\n讨论历史（最近一轮完整保留，更早内容已节选）：\n${history}\n\n请输出最终收敛答案，重点参考最近一轮的内容，更早内容仅供参考。`,
+风格：像一个见识更高的人帮你把两方智慧整合成一个清晰答案，温和、有洞察、不制造对立。深入，不必刻意短。`,
+        `用户原始问题：\n${question}\n\n讨论历史（最近一轮完整保留，更早内容已节选）：\n${history}\n\n请站在第一性目标的高度，融合 A 和 B 的内容，输出一个统一的综合答案。重点参考最近一轮，更早内容仅供参考。`,
         {
           role: 'synthesizer',
           maxTokens: 1800,
+          signal: controller.signal,
           onChunk: (delta, accumulated) => {
             setRounds(prev => prev.map(r =>
               (r.role === 'FINAL' && r.status === 'streaming')
@@ -895,13 +911,33 @@ ${firstPrinciple}
           : r
       ));
       setStage('done');
+      setConverging(false);
+      convergeAbortRef.current = null;
     } catch (e) {
+      // 用户主动中止：丢弃半截 FINAL，回到可继续 battle 的状态，不报错
+      if (e.name === 'AbortError' || controller.signal.aborted) {
+        setRounds(prev => prev.filter(r => !(r.role === 'FINAL' && r.status === 'streaming')));
+        setCurrentStep('');
+        setLoading(false);
+        setConverging(false);
+        convergeAbortRef.current = null;
+        return;
+      }
+      // 真正的错误
       setError(e.message);
       setCurrentStep('');
-      // 清理半截 streaming 的 FINAL
       setRounds(prev => prev.filter(r => !(r.role === 'FINAL' && r.status === 'streaming')));
       setLastFailedAction(() => converge);
       setLoading(false);
+      setConverging(false);
+      convergeAbortRef.current = null;
+    }
+  };
+
+  // 中止整合：丢弃半截内容，回到 battle 状态
+  const stopConverge = () => {
+    if (convergeAbortRef.current) {
+      convergeAbortRef.current.abort();
     }
   };
 
@@ -928,7 +964,7 @@ ${firstPrinciple}
             <div className="text-sm font-medium text-red-900 mb-1">操作失败</div>
             <div className="text-xs text-red-800 leading-relaxed break-words font-mono whitespace-pre-wrap">{error}</div>
             <div className="text-[11px] text-red-600 mt-2 leading-relaxed">
-              已自动重试 2 次仍未成功。常见原因：响应超过 60 秒、API 限流、网络抖动。可尝试：让讨论继续（不输入裁判意见）、或点"直接收敛"结束本次讨论。
+              已自动重试 2 次仍未成功。常见原因：响应超过 60 秒、API 限流、网络抖动。可尝试：让讨论继续（不输入裁判意见）、或点"整合者：综合答案"结束本次讨论。
             </div>
           </div>
         </div>
@@ -1150,7 +1186,7 @@ ${firstPrinciple}
               </div>
               · B 可以发散思考，但每条批评结尾都要说明它如何影响这个目标<br/>
               · A 修订时必须证明新版本"更好地达成这个目标"<br/>
-              · 最终收敛答案会评估对这个目标的达成度
+              · 整合者的综合答案会评估对这个目标的达成度
             </div>
 
             <ErrorCard />
@@ -1372,11 +1408,11 @@ ${firstPrinciple}
                     <div className="w-8 h-8 rounded-lg bg-green-700 text-white flex items-center justify-center"><Target className="w-4 h-4" /></div>
                     <div className="flex-1">
                       <div className="text-sm font-medium text-green-900 flex items-center gap-2">
-                        最终收敛答案
+                        整合者 · 综合答案
                         <span className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-800 rounded font-medium">{r.model || providerNames.providerA}</span>
                       </div>
                       <div className="text-xs text-green-700">
-                        {r.status === 'streaming' ? '综合者正在生成…' : '综合双方观点 + 你的裁判意见'}
+                        {r.status === 'streaming' ? '整合者正在综合双方答案…' : '站在第一性目标的高度，融合 A 与 B 的洞察'}
                       </div>
                     </div>
                   </div>
@@ -1470,16 +1506,26 @@ ${firstPrinciple}
             <div className="flex gap-2">
               <button
                 onClick={submitJudgeAndContinue}
-                className="flex-1 bg-stone-900 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-stone-800 flex items-center justify-center gap-2 transition"
+                disabled={converging}
+                className="flex-1 bg-stone-900 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-stone-800 flex items-center justify-center gap-2 transition disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {judgeInput.trim() ? <><Send className="w-4 h-4" /> 提交裁判意见并继续下一轮</> : <><ChevronRight className="w-4 h-4" /> 让它们继续下一轮</>}
               </button>
-              <button
-                onClick={converge}
-                className="px-4 py-2.5 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 flex items-center gap-1.5 transition"
-              >
-                <Target className="w-4 h-4" /> 直接收敛
-              </button>
+              {converging ? (
+                <button
+                  onClick={stopConverge}
+                  className="px-4 py-2.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 flex items-center gap-1.5 transition"
+                >
+                  <Pause className="w-4 h-4" /> 停止整合，继续 battle
+                </button>
+              ) : (
+                <button
+                  onClick={converge}
+                  className="px-4 py-2.5 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 flex items-center gap-1.5 transition"
+                >
+                  <Target className="w-4 h-4" /> 整合者：综合答案
+                </button>
+              )}
             </div>
           </div>
         )}
