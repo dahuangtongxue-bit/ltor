@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Pause, SkipForward, Target, Sparkles, AlertTriangle, Eye, FileSearch, Gavel, RotateCw, ChevronRight, ChevronDown, Loader2, Copy, Check, Quote, Lock } from 'lucide-react';
+import { Send, Pause, SkipForward, Target, Sparkles, AlertTriangle, Eye, FileSearch, Gavel, RotateCw, ChevronRight, ChevronDown, Loader2, Copy, Check, Quote, Lock, Paperclip, X, FileText } from 'lucide-react';
+import { parseFile, describeParseError, MAX_CHARS } from '../lib/parseFile';
 
 export default function LeftFootRightFoot() {
   const [password, setPassword] = useState('');
@@ -22,6 +23,10 @@ export default function LeftFootRightFoot() {
   const [lastFailedAction, setLastFailedAction] = useState(null); // function to retry
   const [newBToast, setNewBToast] = useState(null); // {roundNum, modelName, ts} — B 跑完后右下角浮动提示
   const [converging, setConverging] = useState(false); // 是否正在整合（用于按钮变"停止整合"）
+  // 上传的背景文档：{ name, text, truncated, charCount, kind } | null
+  const [doc, setDoc] = useState(null);
+  const [docParsing, setDocParsing] = useState(false); // 文件解析中
+  const fileInputRef = useRef(null);
   const convergeAbortRef = useRef(null); // 整合的 AbortController，用于中止
   const scrollRef = useRef(null);
   const judgeInputRef = useRef(null);
@@ -578,6 +583,49 @@ ${goal}
 
 控制总长在 600 字以内，直接进入评级，不要客套，不要总结结尾。`;
 
+  // ===== 文件上传处理 =====
+  const handleFileSelect = async (file) => {
+    if (!file) return;
+    setError('');
+    setDocParsing(true);
+    try {
+      const result = await parseFile(file);
+      setDoc({
+        name: file.name,
+        text: result.text,
+        truncated: result.truncated,
+        charCount: result.charCount,
+        kind: result.kind,
+      });
+    } catch (e) {
+      setError(describeParseError(e));
+      setDoc(null);
+    } finally {
+      setDocParsing(false);
+      // 清空 input 的 value，确保同名文件可以再次选择
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const onFileInputChange = (e) => {
+    const file = e.target.files && e.target.files[0];
+    handleFileSelect(file);
+  };
+
+  const removeDoc = () => {
+    setDoc(null);
+    setError('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // 构造"背景资料"文本块，注入到提炼目标 / A 首答
+  // 返回空串表示没有文档
+  const buildDocContext = () => {
+    if (!doc || !doc.text) return '';
+    const head = `【用户上传的背景资料：${doc.name}】${doc.truncated ? `（文档较长，仅截取前 ${MAX_CHARS} 字）` : ''}`;
+    return `${head}\n${doc.text}\n【背景资料结束】`;
+  };
+
   // 第一步：从问题提取第一性目标，进入确认页
   const extractGoal = async () => {
     if (!question.trim()) return;
@@ -586,9 +634,13 @@ ${goal}
     setLoading(true);
 
     try {
+      const docContext = buildDocContext();
+      const userMsg = docContext
+        ? `${docContext}\n\n用户的问题：\n${question}\n\n请结合背景资料提炼第一性目标，一行输出。`
+        : `用户的问题：\n${question}\n\n请提炼第一性目标，一行输出。`;
       const result = await callClaude(
         SYSTEM_GOAL_EXTRACTOR,
-        `用户的问题：\n${question}\n\n请提炼第一性目标，一行输出。`,
+        userMsg,
         { role: 'goal', maxTokens: 200 }
       );
       setFirstPrinciple(result.text.trim().replace(/^["'"']|["'"']$/g, ''));
@@ -605,9 +657,10 @@ ${goal}
   // B 跑完才会被插入到 rounds，跑的过程中 UI 上没有任何痕迹
   // 跑完后会通过 newBToastRound 触发右下角提示
   const triggerBReview = (aContent, roundNum, isRevise = false, aVersion = '') => {
+    const docContextB = (!isRevise && doc) ? `${buildDocContext()}\n\n` : '';
     const userMessage = isRevise
       ? `用户的问题：\n${question}\n\n这是 A 的修订版答案（${aVersion}）：\n${aContent}\n\n请重点审查：A 是否在向第一性目标真正收敛？是否引入了新问题或新分歧？按格式输出。`
-      : `用户的问题是：\n${question}\n\nA 的回答是：\n${aContent}\n\n请按"先发散后收敛"的方式输出你的审查批评，每条都要回答它如何影响第一性目标。`;
+      : `${docContextB}用户的问题是：\n${question}\n\nA 的回答是：\n${aContent}\n\n请按"先发散后收敛"的方式输出你的审查批评，每条都要回答它如何影响第一性目标。`;
 
     // 立即插入 pending 占位（A 答案下方显示"B 正在评审中..."）
     setRounds(prev => [...prev, {
@@ -694,9 +747,11 @@ ${goal}
       setCurrentStep('');
       setLoading(false); // A 一开始流式就解锁 UI，让用户看到字逐渐出来
 
+      const docContextA = buildDocContext();
+      const aUserMsg = docContextA ? `${docContextA}\n\n用户的问题：\n${question}` : question;
       const aResult = await callClaude(
         SYSTEM_A_INITIAL(firstPrinciple),
-        question,
+        aUserMsg,
         {
           role: 'main',
           maxTokens: 1500,
@@ -951,6 +1006,8 @@ ${firstPrinciple}
     setError('');
     setCurrentStep('');
     setLastFailedAction(null);
+    setDoc(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   // 可复用的错误卡 — 显示详细错误并支持重试
@@ -1099,6 +1156,51 @@ ${firstPrinciple}
               className="w-full p-4 border border-stone-200 rounded-xl text-sm resize-none focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
               rows={4}
             />
+
+            {/* 文件上传区 */}
+            <div className="mt-3 mb-4">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".txt,.md,.markdown,.csv,.log,.json,.html,.htm,.docx,.xlsx,.xls,.pdf"
+                onChange={onFileInputChange}
+                className="hidden"
+              />
+              {!doc && !docParsing && (
+                <button
+                  onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 border border-dashed border-stone-300 rounded-lg text-xs text-stone-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/40 transition"
+                >
+                  <Paperclip className="w-3.5 h-3.5" />
+                  上传背景资料（可选）· Word / Excel / PDF / 文本
+                </button>
+              )}
+              {docParsing && (
+                <div className="w-full flex items-center justify-center gap-2 py-2.5 border border-stone-200 rounded-lg text-xs text-stone-500">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  正在解析文件……
+                </div>
+              )}
+              {doc && !docParsing && (
+                <div className="w-full flex items-center gap-2.5 px-3 py-2.5 bg-blue-50/60 border border-blue-100 rounded-lg text-xs">
+                  <FileText className="w-4 h-4 text-blue-600 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-stone-800 truncate">{doc.name}</div>
+                    <div className="text-stone-500">
+                      {doc.charCount.toLocaleString()} 字
+                      {doc.truncated && <span className="text-amber-600"> · 已截取前 {MAX_CHARS.toLocaleString()} 字</span>}
+                    </div>
+                  </div>
+                  <button
+                    onClick={removeDoc}
+                    className="shrink-0 text-stone-400 hover:text-red-600 p-1 rounded hover:bg-white/60 transition"
+                    title="移除文件"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
 
             <div className="p-3 bg-stone-50 rounded-lg mb-4 text-xs text-stone-600 space-y-2">
               <div className="flex items-center gap-2 flex-wrap">
