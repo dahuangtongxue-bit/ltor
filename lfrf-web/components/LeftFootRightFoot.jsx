@@ -29,6 +29,8 @@ export default function LeftFootRightFoot() {
   const [showHistory, setShowHistory] = useState(false); // 是否在看历史面板
   const [viewingEntry, setViewingEntry] = useState(null); // 正在查看的某条历史（只读）
   const savedThisRunRef = useRef(false); // 防止同一轮重复保存
+  // 记录哪些 A 卡片的"对评审的回应"被展开了（key: round 号）
+  const [expandedProcess, setExpandedProcess] = useState({});
   // 上传的背景文档：{ name, text, truncated, charCount, kind } | null
   const [doc, setDoc] = useState(null);
   const [docParsing, setDocParsing] = useState(false); // 文件解析中
@@ -170,6 +172,19 @@ export default function LeftFootRightFoot() {
     if (!content) return null;
     const match = content.match(/\*\*评级[：:]\s*([ABC]\+?)\s*\*\*/);
     return match ? match[1] : null;
+  };
+
+  // 把 A 修订版的内容按 ---PROCESS--- 标记切成「答案」和「过程（对评审的回应）」两部分
+  // 找不到标记时，整段都算答案，process 为空
+  const splitAnswerProcess = (content) => {
+    if (!content) return { answer: '', process: '' };
+    // 容忍前后空格和可能的 markdown 包裹（如 **---PROCESS---** 或 `---PROCESS---`）
+    const marker = /\n?\s*[*`#> ]*-{2,}\s*PROCESS\s*-{2,}[*`]*\s*\n?/i;
+    const idx = content.search(marker);
+    if (idx === -1) return { answer: content, process: '' };
+    const answer = content.slice(0, idx).trim();
+    const process = content.slice(idx).replace(marker, '').trim();
+    return { answer, process };
   };
 
   // 评级 → Tailwind class 完整映射（必须是完整字符串，JIT 才能识别）
@@ -513,18 +528,25 @@ ${goal}
 修订原则：
 1. 优先关注 B 的评级和总评——评级低（B/C）说明有重大问题需要正面回应；评级高（A+/A）说明只需打磨边角
 2. 不是小修小补，而是基于反馈做实质性调整——但保持精炼
-3. 明确说明你改了什么、为什么改（简短，3-5 点即可）
-4. 如果某些批评你不接受，明确说明并给出理由
-5. **控制在 900 字以内**，深度优先于篇幅
+3. **控制在 900 字以内**，深度优先于篇幅
 
-输出结构（用 Markdown）：
-**修订后的核心判断**
-**相比上版的关键改动**（要点形式，说明改了什么、为什么改）
+【重要：输出必须分成两部分，中间用一行单独的 ---PROCESS--- 分隔】
+
+第一部分（答案本身，用户主要看这个）——直接给出修订后的完整答案，不要在这部分谈论 B 的意见、不要写"改了什么"，就是一个干净、完整、可直接使用的答案：
+**核心判断**（修订后的结论）
 **展开分析**（深度回答，含子小节）
-**对评审意见的逐条回应**（接受 / 不接受 + 理由）
 **剩余的不确定性**
 **置信度评估**：XX%
-**对第一性目标的服务方式**：（1 句话）`;
+**对第一性目标的服务方式**：（1 句话）
+
+然后输出一行：
+---PROCESS---
+
+第二部分（修订说明，会被折叠，想深究的用户才看）——简短即可：
+**相比上版的关键改动**（要点形式，说明改了什么、为什么改）
+**对评审意见的回应**（接受了哪些 / 不接受哪些 + 理由）
+
+记住：第一部分要像一个独立完整的答案，读起来不需要知道 B 说过什么；把所有"我对 B 的回应""我改了什么"都放到 ---PROCESS--- 之后。`;
 
   // 角色 B 的 system prompt — 独立评审者，先评级后批评，严格倾向
   const SYSTEM_B = (goal) => `你是"独立评审者 B"。你的任务是审视主答者 A 的回答，对它做出公允但严格的评级，并给出有判断力的审视意见。
@@ -1350,7 +1372,7 @@ ${firstPrinciple}
                         <div className="text-xs text-stone-500">Round {r.round} · {r.version}</div>
                       </div>
                     </div>
-                    <div className="text-sm text-stone-700 leading-relaxed pl-10 select-text">{renderMarkdown(r.content)}</div>
+                    <div className="text-sm text-stone-700 leading-relaxed pl-10 select-text">{renderMarkdown(splitAnswerProcess(r.content).answer)}</div>
                   </div>
                 );
               }
@@ -1695,12 +1717,38 @@ ${firstPrinciple}
                     <span className="text-xs px-2 py-1 bg-purple-50 text-purple-800 rounded-full border border-purple-200">{r.version}</span>
                   </div>
                   <div className="text-sm text-stone-700 leading-relaxed pl-10 select-text">
-                    {r.content
-                      ? renderMarkdown(r.content)
-                      : <span className="text-stone-400 italic">思考中…</span>}
-                    {r.status === 'streaming' && (
-                      <span className="inline-block w-[2px] h-4 bg-purple-500 ml-0.5 align-middle animate-pulse" />
-                    )}
+                    {(() => {
+                      if (!r.content) {
+                        return <span className="text-stone-400 italic">思考中…</span>;
+                      }
+                      // 流式中不切分（标记可能没输出完），直接整段显示
+                      if (r.status === 'streaming') {
+                        return <>{renderMarkdown(r.content)}<span className="inline-block w-[2px] h-4 bg-purple-500 ml-0.5 align-middle animate-pulse" /></>;
+                      }
+                      const { answer, process } = splitAnswerProcess(r.content);
+                      const isOpen = !!expandedProcess[r.round];
+                      return (
+                        <>
+                          {renderMarkdown(answer)}
+                          {process && (
+                            <div className="mt-4 pt-3 border-t border-dashed border-stone-200">
+                              <button
+                                onClick={() => setExpandedProcess(prev => ({ ...prev, [r.round]: !prev[r.round] }))}
+                                className="flex items-center gap-1.5 text-xs text-stone-400 hover:text-stone-600 transition"
+                              >
+                                <ChevronRight className={`w-3.5 h-3.5 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                                A 对评审的回应与修订说明
+                              </button>
+                              {isOpen && (
+                                <div className="mt-2 text-xs text-stone-500 leading-relaxed bg-stone-50/60 rounded-lg p-3">
+                                  {renderMarkdown(process)}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               );
