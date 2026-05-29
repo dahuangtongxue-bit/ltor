@@ -1426,7 +1426,7 @@ ${firstPrinciple}
                 <div className="text-xs text-blue-500">Word / Excel / PDF / 文本</div>
               </div>
             )}
-            <label className="block text-sm font-medium text-stone-700 mb-2">提出一个值得推敲的问题</label>
+            <label className="block text-sm font-medium text-stone-700 mb-2">提出你的问题，咱们一起分析</label>
             <textarea
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
@@ -1506,7 +1506,7 @@ ${firstPrinciple}
             </button>
           </div>
 
-          <p className="text-center text-xs text-stone-400 mt-4">两个不同的大模型互相博弈打磨答案，你做最终裁判</p>
+          <p className="text-center text-xs text-stone-400 mt-4">你可以提出自己的观点参与讨论</p>
         </div>
       </div>
     );
@@ -1583,7 +1583,7 @@ ${firstPrinciple}
                 disabled={!firstPrinciple.trim() || loading}
                 className="flex-1 bg-stone-900 text-white py-2.5 rounded-xl text-sm font-medium hover:bg-stone-800 disabled:opacity-40 transition flex items-center justify-center gap-2"
               >
-                {loading ? <><Loader2 className="w-4 h-4 animate-spin" /> 启动中……</> : <>确认并开始对抗式 review <ChevronRight className="w-4 h-4" /></>}
+                {loading ? <><Loader2 className="w-4 h-4 animate-spin" /> 启动中……</> : <>确认并开始 <ChevronRight className="w-4 h-4" /></>}
               </button>
             </div>
           </div>
