@@ -11,9 +11,10 @@ export default function LeftFootRightFoot() {
   const [remaining, setRemaining] = useState(null);
   const [providerNames, setProviderNames] = useState({ providerA: 'Provider A', providerB: 'Provider B' });
   const [question, setQuestion] = useState('');
-  const [stage, setStage] = useState('input'); // input | confirming-goal | running | done
+  const [stage, setStage] = useState('input'); // input | running | done
   const [firstPrinciple, setFirstPrinciple] = useState('');
   const [editingGoal, setEditingGoal] = useState(false);
+  const [goalDraft, setGoalDraft] = useState(''); // 调整目标时的临时输入
   const [rounds, setRounds] = useState([]); // [{role, content, version, critiques?}]
   const [currentStep, setCurrentStep] = useState(''); // describes what's happening
   const [judgeInput, setJudgeInput] = useState('');
@@ -682,11 +683,15 @@ ${goal}
   };
 
   // 第一步：从问题提取第一性目标，进入确认页
-  const extractGoal = async () => {
+  // 点"开始讨论"：后台静默提炼第一性目标，然后直接进入讨论（不再有确认页）
+  const startDiscussion = async () => {
     if (!question.trim()) return;
     setError('');
     setLastFailedAction(null);
+    setStage('running');
+    setRounds([]);
     setLoading(true);
+    setCurrentStep('正在理解你的问题……');
 
     try {
       const docContext = buildDocContext();
@@ -698,12 +703,15 @@ ${goal}
         userMsg,
         { role: 'goal', maxTokens: 200 }
       );
-      setFirstPrinciple(result.text.trim().replace(/^["'"']|["'"']$/g, ''));
-      setStage('confirming-goal');
+      const goal = result.text.trim().replace(/^["'"']|["'"']$/g, '');
+      setFirstPrinciple(goal);
+      // 直接进入讨论，把 goal 传进去（避免 setState 异步导致读到旧值）
+      await runDebate(goal);
     } catch (e) {
       setError(e.message);
-      setLastFailedAction(() => extractGoal);
-    } finally {
+      setLastFailedAction(() => startDiscussion);
+      setStage('input');
+      setCurrentStep('');
       setLoading(false);
     }
   };
@@ -711,7 +719,8 @@ ${goal}
   // 后台触发 B 审查（fire-and-forget，不占位、不阻塞 UI）
   // B 跑完才会被插入到 rounds，跑的过程中 UI 上没有任何痕迹
   // 跑完后会通过 newBToastRound 触发右下角提示
-  const triggerBReview = (aContent, roundNum, isRevise = false, aVersion = '') => {
+  const triggerBReview = (aContent, roundNum, isRevise = false, aVersion = '', goalOverride) => {
+    const goal = goalOverride || firstPrinciple;
     const docContextB = (!isRevise && doc) ? `${buildDocContext()}\n\n` : '';
     const userMessage = isRevise
       ? `用户的问题：\n${question}\n\n这是 A 的修订版答案（${aVersion}）：\n${aContent}\n\n请重点审查：A 是否在向第一性目标真正收敛？是否引入了新问题或新分歧？按格式输出。`
@@ -728,7 +737,7 @@ ${goal}
     }]);
 
     callClaude(
-      SYSTEM_B(firstPrinciple),
+      SYSTEM_B(goal),
       userMessage,
       {
         role: 'critic',
@@ -777,8 +786,9 @@ ${goal}
 
   // 第二步：在第一性目标确认后，真正开始辩论
   // 新交互：A 出来立刻显示，B 后台静默跑
-  const runDebate = async () => {
-    if (!firstPrinciple.trim()) return;
+  const runDebate = async (goalOverride) => {
+    const goal = goalOverride || firstPrinciple;
+    if (!goal.trim()) return;
     setError('');
     setLastFailedAction(null);
     setStage('running');
@@ -805,7 +815,7 @@ ${goal}
       const docContextA = buildDocContext();
       const aUserMsg = docContextA ? `${docContextA}\n\n用户的问题：\n${question}` : question;
       const aResult = await callClaude(
-        SYSTEM_A_INITIAL(firstPrinciple),
+        SYSTEM_A_INITIAL(goal),
         aUserMsg,
         {
           role: 'main',
@@ -829,13 +839,13 @@ ${goal}
       ));
 
       // B 后台静默跑（不 await，不阻塞）
-      triggerBReview(aResult.text, 1, false);
+      triggerBReview(aResult.text, 1, false, '', goal);
     } catch (e) {
       setError(e.message);
-      setLastFailedAction(() => runDebate);
+      setLastFailedAction(() => () => runDebate(goal));
       // 清理 streaming 状态的半截 A 卡片
       setRounds(prev => prev.filter(r => !(r.role === 'A' && r.status === 'streaming')));
-      setStage('confirming-goal');
+      setStage('input');
       setCurrentStep('');
       setLoading(false);
     }
@@ -1534,95 +1544,15 @@ ${firstPrinciple}
             <ErrorCard />
 
             <button
-              onClick={extractGoal}
+              onClick={startDiscussion}
               disabled={!question.trim() || loading}
               className="w-full bg-stone-900 text-white py-3 rounded-xl text-sm font-medium hover:bg-stone-800 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
             >
-              {loading ? <><Loader2 className="w-4 h-4 animate-spin" /> 正在提炼第一性目标……</> : <><Sparkles className="w-4 h-4" /> 提炼第一性目标</>}
+              {loading ? <><Loader2 className="w-4 h-4 animate-spin" /> 启动中……</> : <><Sparkles className="w-4 h-4" /> 开始讨论</>}
             </button>
           </div>
 
           <p className="text-center text-xs text-stone-400 mt-4">你可以提出自己的观点参与讨论</p>
-        </div>
-      </div>
-    );
-  }
-
-  // === 第一性目标确认页 ===
-  if (stage === 'confirming-goal') {
-    return (
-      <div className="min-h-screen bg-stone-50 flex items-center justify-center p-6">
-        <div className="max-w-2xl w-full">
-          <div className="text-center mb-6">
-            <div className="inline-flex items-center gap-2 mb-2 text-stone-500 text-xs">
-              <Target className="w-3.5 h-3.5" />
-              <span>第一性目标 · 锚定整场讨论</span>
-            </div>
-            <h2 className="text-lg font-medium text-stone-900">你真正想解决的核心目标</h2>
-            <p className="text-xs text-stone-500 mt-1">整场讨论都会围绕它展开 — 请确认或修改</p>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-sm">
-            <div className="text-xs text-stone-500 mb-2">你的问题</div>
-            <div className="text-sm text-stone-700 mb-5 p-3 bg-stone-50 rounded-lg leading-relaxed">{question}</div>
-
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-xs text-stone-500 flex items-center gap-1.5">
-                <Target className="w-3.5 h-3.5 text-amber-700" />
-                AI 提炼的第一性目标
-              </div>
-              {!editingGoal && (
-                <button
-                  onClick={() => setEditingGoal(true)}
-                  className="text-xs text-blue-700 hover:text-blue-900 transition"
-                >
-                  修改
-                </button>
-              )}
-            </div>
-
-            {editingGoal ? (
-              <textarea
-                value={firstPrinciple}
-                onChange={(e) => setFirstPrinciple(e.target.value)}
-                autoFocus
-                className="w-full p-3 border border-amber-300 bg-amber-50/40 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-200 mb-4"
-                rows={2}
-              />
-            ) : (
-              <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900 leading-relaxed mb-4 font-medium">
-                {firstPrinciple}
-              </div>
-            )}
-
-            <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-900 leading-relaxed mb-5">
-              <div className="font-medium mb-1 flex items-center gap-1.5">
-                <Sparkles className="w-3 h-3" />
-                这个目标会被怎么用？
-              </div>
-              · B 会从不同角度审视，并说明每点如何影响这个目标<br/>
-              · A 每次修订都会努力更好地达成这个目标<br/>
-              · 最后的结论会评估对这个目标的达成度
-            </div>
-
-            <ErrorCard />
-
-            <div className="flex gap-2">
-              <button
-                onClick={() => { setStage('input'); setEditingGoal(false); }}
-                className="px-4 py-2.5 border border-stone-200 text-stone-700 rounded-xl text-sm hover:bg-stone-50 transition"
-              >
-                返回
-              </button>
-              <button
-                onClick={runDebate}
-                disabled={!firstPrinciple.trim() || loading}
-                className="flex-1 bg-stone-900 text-white py-2.5 rounded-xl text-sm font-medium hover:bg-stone-800 disabled:opacity-40 transition flex items-center justify-center gap-2"
-              >
-                {loading ? <><Loader2 className="w-4 h-4 animate-spin" /> 启动中……</> : <>确认并开始 <ChevronRight className="w-4 h-4" /></>}
-              </button>
-            </div>
-          </div>
         </div>
       </div>
     );
@@ -1680,8 +1610,52 @@ ${firstPrinciple}
           <div className="bg-amber-50/60 border-x border-amber-200 px-5 py-2.5 flex items-start gap-2 border-b border-amber-200">
             <Target className="w-3.5 h-3.5 text-amber-700 mt-0.5 flex-shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="text-[10px] text-amber-700 uppercase tracking-wider font-medium mb-0.5">第一性目标 · 锚定全场</div>
-              <div className="text-xs text-amber-900 font-medium leading-relaxed">{firstPrinciple}</div>
+              <div className="text-[10px] text-amber-700 uppercase tracking-wider font-medium mb-0.5 flex items-center justify-between">
+                <span>讨论目标 · 锚定全场</span>
+                {!editingGoal && !loading && (
+                  <button
+                    onClick={() => { setGoalDraft(firstPrinciple); setEditingGoal(true); }}
+                    className="text-amber-600 hover:text-amber-900 normal-case tracking-normal font-normal transition"
+                  >
+                    调整
+                  </button>
+                )}
+              </div>
+              {editingGoal ? (
+                <div className="mt-1">
+                  <textarea
+                    value={goalDraft}
+                    onChange={(e) => setGoalDraft(e.target.value)}
+                    rows={2}
+                    className="w-full text-xs text-amber-900 bg-white border border-amber-300 rounded-lg p-2 focus:outline-none focus:border-amber-500 resize-none"
+                    autoFocus
+                  />
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <button
+                      onClick={() => {
+                        const g = goalDraft.trim();
+                        if (!g) return;
+                        setEditingGoal(false);
+                        setFirstPrinciple(g);
+                        savedThisRunRef.current = false;
+                        runDebate(g); // 用新目标重新讨论
+                      }}
+                      className="text-[11px] px-2.5 py-1 bg-amber-600 text-white rounded-md hover:bg-amber-700 transition"
+                    >
+                      用新目标重新讨论
+                    </button>
+                    <button
+                      onClick={() => setEditingGoal(false)}
+                      className="text-[11px] px-2.5 py-1 text-amber-700 hover:bg-amber-100 rounded-md transition"
+                    >
+                      取消
+                    </button>
+                    <span className="text-[10px] text-amber-600">改了目标会清空当前讨论，重新开始</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-xs text-amber-900 font-medium leading-relaxed">{firstPrinciple}</div>
+              )}
             </div>
           </div>
         )}
