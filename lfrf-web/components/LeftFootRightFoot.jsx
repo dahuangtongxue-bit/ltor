@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Pause, SkipForward, Target, Sparkles, AlertTriangle, Eye, FileSearch, Gavel, RotateCw, ChevronRight, ChevronDown, Loader2, Copy, Check, Quote, Lock, Paperclip, X, FileText, History, Clock, Trash2, ArrowLeft } from 'lucide-react';
+import { Send, Pause, SkipForward, Target, Sparkles, AlertTriangle, Eye, FileSearch, Gavel, RotateCw, ChevronRight, ChevronDown, Loader2, Copy, Check, Quote, Lock, Paperclip, X, FileText, History, Clock, Trash2, ArrowLeft, PanelLeft } from 'lucide-react';
 import { parseFile, describeParseError, MAX_CHARS } from '../lib/parseFile';
 import { loadHistory, saveHistoryEntry, deleteHistoryEntry, clearHistory, formatTime } from '../lib/history';
 
@@ -1088,6 +1088,97 @@ ${firstPrinciple}
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  // 固定在视窗左上角的历史触发图标（始终可见，对标主流大模型的侧边栏入口）
+  const HistoryButton = () => (
+    <button
+      onClick={() => setShowHistory(true)}
+      className="fixed top-4 left-4 z-30 w-9 h-9 flex items-center justify-center rounded-lg bg-white/80 backdrop-blur border border-stone-200 text-stone-500 hover:text-stone-900 hover:border-stone-300 shadow-sm transition"
+      title="历史记录"
+      aria-label="打开历史记录"
+    >
+      <PanelLeft className="w-4 h-4" />
+    </button>
+  );
+
+  // 左侧滑出抽屉 — 历史记录列表
+  const HistoryDrawer = () => (
+    <>
+      {/* 半透明遮罩 */}
+      <div
+        className={`fixed inset-0 z-40 bg-black/30 transition-opacity duration-200 ${showHistory ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+        onClick={() => setShowHistory(false)}
+      />
+      {/* 抽屉本体 */}
+      <div
+        className={`fixed top-0 left-0 z-50 h-full w-[320px] max-w-[85vw] bg-white shadow-2xl flex flex-col transition-transform duration-200 ease-out ${showHistory ? 'translate-x-0' : '-translate-x-full'}`}
+      >
+        {/* 抽屉头部 */}
+        <div className="flex items-center justify-between px-4 py-3.5 border-b border-stone-100">
+          <h2 className="text-sm font-medium text-stone-900 flex items-center gap-2">
+            <History className="w-4 h-4 text-stone-500" /> 历史记录
+          </h2>
+          <div className="flex items-center gap-1">
+            {history.length > 0 && (
+              <button
+                onClick={handleClearHistory}
+                className="text-xs text-stone-400 hover:text-red-600 transition px-2 py-1 rounded hover:bg-stone-50"
+              >
+                清空
+              </button>
+            )}
+            <button
+              onClick={() => setShowHistory(false)}
+              className="w-7 h-7 flex items-center justify-center rounded text-stone-400 hover:text-stone-900 hover:bg-stone-50 transition"
+              aria-label="关闭"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* 列表区 */}
+        <div className="flex-1 overflow-y-auto p-3">
+          {history.length === 0 ? (
+            <div className="text-center text-stone-400 text-sm py-16 px-4">
+              还没有历史记录<br />
+              <span className="text-xs">完成一次完整的分析后，<br />会自动保存在这里</span>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {history.map(entry => (
+                <button
+                  key={entry.id}
+                  onClick={() => openHistoryEntry(entry)}
+                  className="w-full text-left bg-white rounded-xl border border-stone-200 p-3 hover:border-blue-300 hover:bg-blue-50/30 transition group"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-stone-800 line-clamp-2">{entry.question || '(无问题)'}</div>
+                      {entry.firstPrinciple && (
+                        <div className="text-xs text-stone-500 mt-1 line-clamp-1">🎯 {entry.firstPrinciple}</div>
+                      )}
+                      <div className="flex items-center gap-1.5 mt-1.5 text-[11px] text-stone-400">
+                        <Clock className="w-3 h-3" /> {formatTime(entry.createdAt)}
+                        {entry.docName && <><span>·</span><FileText className="w-3 h-3" /></>}
+                      </div>
+                    </div>
+                    <span
+                      onClick={(e) => handleDeleteHistory(entry.id, e)}
+                      className="shrink-0 text-stone-300 hover:text-red-600 p-1 rounded hover:bg-stone-50 transition opacity-0 group-hover:opacity-100 cursor-pointer"
+                      title="删除"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+
   // 可复用的错误卡 — 显示详细错误并支持重试
   const ErrorCard = () => {
     if (!error) return null;
@@ -1211,72 +1302,6 @@ ${firstPrinciple}
     );
   }
 
-  // === 历史记录面板 ===
-  if (showHistory) {
-    return (
-      <div className="min-h-screen bg-stone-50 flex items-start justify-center p-6">
-        <div className="max-w-2xl w-full">
-          <div className="flex items-center justify-between mb-6 pt-4">
-            <button
-              onClick={() => setShowHistory(false)}
-              className="flex items-center gap-1.5 text-sm text-stone-600 hover:text-stone-900 transition"
-            >
-              <ArrowLeft className="w-4 h-4" /> 返回
-            </button>
-            <h2 className="text-lg font-medium text-stone-900 flex items-center gap-2">
-              <History className="w-5 h-5 text-stone-500" /> 历史记录
-            </h2>
-            {history.length > 0 ? (
-              <button
-                onClick={handleClearHistory}
-                className="text-xs text-stone-400 hover:text-red-600 transition"
-              >
-                清空
-              </button>
-            ) : <span className="w-8" />}
-          </div>
-
-          {history.length === 0 ? (
-            <div className="bg-white rounded-2xl border border-stone-200 p-12 text-center text-stone-400 text-sm">
-              还没有历史记录<br />
-              <span className="text-xs">完成一次完整的分析后，会自动保存在这里</span>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {history.map(entry => (
-                <button
-                  key={entry.id}
-                  onClick={() => openHistoryEntry(entry)}
-                  className="w-full text-left bg-white rounded-xl border border-stone-200 p-4 hover:border-blue-300 hover:shadow-sm transition group"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-stone-800 line-clamp-2">{entry.question || '(无问题)'}</div>
-                      {entry.firstPrinciple && (
-                        <div className="text-xs text-stone-500 mt-1 line-clamp-1">🎯 {entry.firstPrinciple}</div>
-                      )}
-                      <div className="flex items-center gap-2 mt-2 text-xs text-stone-400">
-                        <Clock className="w-3 h-3" /> {formatTime(entry.createdAt)}
-                        {entry.docName && <><span>·</span><FileText className="w-3 h-3" /> {entry.docName}</>}
-                      </div>
-                    </div>
-                    <span
-                      onClick={(e) => handleDeleteHistory(entry.id, e)}
-                      className="shrink-0 text-stone-300 hover:text-red-600 p-1 rounded hover:bg-stone-50 transition opacity-0 group-hover:opacity-100 cursor-pointer"
-                      title="删除"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   // === 只读查看某条历史 ===
   if (viewingEntry) {
     const entry = viewingEntry;
@@ -1394,6 +1419,8 @@ ${firstPrinciple}
   if (stage === 'input') {
     return (
       <div className="min-h-screen bg-stone-50 flex items-center justify-center p-6">
+        <HistoryButton />
+        <HistoryDrawer />
         <div className="max-w-2xl w-full">
           <div className="text-center mb-8">
             <div className="inline-flex items-center gap-2 mb-3">
@@ -1401,14 +1428,6 @@ ${firstPrinciple}
               <h1 className="text-2xl font-medium text-stone-900">左脚踩右脚</h1>
               <div className="w-10 h-10 rounded-lg bg-orange-100 text-orange-800 flex items-center justify-center font-medium text-lg">R</div>
             </div>
-            {history.length > 0 && (
-              <button
-                onClick={() => setShowHistory(true)}
-                className="mt-3 inline-flex items-center gap-1.5 text-xs text-stone-500 hover:text-blue-600 border border-stone-200 hover:border-blue-300 rounded-full px-3 py-1.5 transition"
-              >
-                <History className="w-3.5 h-3.5" /> 历史记录（{history.length}）
-              </button>
-            )}
           </div>
 
           <div
@@ -1594,10 +1613,18 @@ ${firstPrinciple}
   // === 运行/完成页 ===
   return (
     <div className="min-h-screen bg-stone-50 p-4">
+      <HistoryDrawer />
       <div className="max-w-4xl mx-auto">
         {/* 顶栏 */}
         <div className="bg-white rounded-t-2xl border border-stone-200 border-b-0 px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowHistory(true)}
+              className="w-7 h-7 flex items-center justify-center rounded-md text-stone-400 hover:text-stone-900 hover:bg-stone-50 transition mr-0.5"
+              title="历史记录"
+            >
+              <PanelLeft className="w-4 h-4" />
+            </button>
             <div className="w-7 h-7 rounded-md bg-blue-100 text-blue-800 flex items-center justify-center font-medium text-xs">L</div>
             <span className="font-medium text-sm">左脚踩右脚</span>
             <span className="ml-2 text-xs px-2 py-0.5 bg-stone-100 text-stone-600 rounded-full">深度模式</span>
