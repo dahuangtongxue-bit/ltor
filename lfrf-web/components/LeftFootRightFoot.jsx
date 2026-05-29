@@ -264,7 +264,7 @@ export default function LeftFootRightFoot() {
         else lines.push(`## 评审者 B · Round ${r.round}\n${r.content}\n`);
       }
       else if (r.role === 'JUDGE') lines.push(`## 我的观点 · Round ${r.round}\n${r.content}\n`);
-      else if (r.role === 'FINAL') lines.push(`## 整合者 · 综合答案\n${r.content}\n`);
+      else if (r.role === 'FINAL') lines.push(`## 结论\n${r.content}\n`);
     });
     navigator.clipboard.writeText(lines.join('\n'));
     setCopied(true);
@@ -942,7 +942,7 @@ ${goal}
     setConverging(true);
 
     try {
-      setCurrentStep('整合者正在综合双方答案……');
+      setCurrentStep('正在总结结论……');
 
       // 智能压缩历史：最近一轮保留完整内容，更早的内容做摘要级截断
       // 跳过 pending/failed 状态的 B（用户在 B 没跑完时点了整合，或 B 失败了）
@@ -979,30 +979,26 @@ ${goal}
       setLoading(false); // 流式开始就解锁 UI
 
       const finalResult = await callClaude(
-        `你是一位"整合者"。你的职责不是裁判 A 和 B 谁对谁错，而是站在比双方都更高的视角，用第一性原理思考，把 A 的深度和 B 的批判性洞察融合成一个比任何单方都更好的完整答案。
+        `你是一位"决策总结者"。前面 A 和 B 已经做了充分的深度讨论，A 的最新答案也已经吸收了 B 的意见。你的任务不是把那些论证再重述一遍，而是帮用户从一大堆分析里跳出来，给一个能直接拿走、用得上的结论。
 
-【第一性目标】（你的最高北极星，整个答案必须服务于此，不要被 A/B 的具体表述束缚）：
+【第一性目标】（用户真正要解决的）：
 ${firstPrinciple}
 
-【核心工作方式】
-1. 回到第一性：先问"用户真正要解决的问题是什么"，从根本需求出发组织答案，而不是简单拼接 A 和 B 的观点。
-2. 融合为主：把 A 的论证和 B 的洞察看作同一个答案的不同侧面，主动寻找并整合它们的共识与互补之处，形成一个连贯、统一的回答。
-3. 分歧为辅：只有当 A 和 B 存在"会实质影响用户决策"的分歧时，才单独点出——而且不要替用户选边，而是说清楚"这个权衡取决于什么"，把决策依据交给用户。无关紧要的措辞差异不要提。
+【你要做的，和你不要做的】
+- 不要重述 A 的论证过程，不要复述 B 的评审，不要再写一遍"展开分析"——那些用户已经看过了。
+- 你要做的是"升华"：把前面那些论证，浓缩成一个直接面向决策的结论。说人话，像一个想清楚了的朋友直接告诉用户该怎么办。
 
-【输出格式】
-**综合结论**：（站在第一性目标的高度，给出一个直接、完整、可用的结论——这是融合后的答案，不是"谁赢了"）
-**关键要点**：（3-5 条，把 A 的深度和 B 的洞察融合进去，每条简要展开）
-**需要你自己权衡的地方**（可选，仅当存在影响决策的实质分歧时才写）：（说清楚权衡的两端分别适合什么情况，由用户根据自身处境判断，不替用户拍板）
-**对第一性目标的达成度**：（1-2 句）
-**剩余的不确定性**
-**置信度评估**：XX%
-**给你的下一步建议**：（2-4 条可执行的行动）
+【输出格式】（精简，这是关键——宁可短，不要长篇大论）
+**结论**：（一两句话，直接回答用户的问题。明确、不含糊。）
+**怎么做**：（2-4 条具体、可执行的行动建议，每条一行，越具体越好）
+**最需要注意的**：（1-2 条最关键的风险或前提条件——只说最重要的，不要罗列）
+**信心**：XX%（一句话说明为什么是这个信心水平）
 
-风格：像一个见识更高的人帮你把两方智慧整合成一个清晰答案，温和、有洞察、不制造对立。深入，不必刻意短。`,
-        `用户原始问题：\n${question}\n\n讨论历史（最近一轮完整保留，更早内容已节选）：\n${history}\n\n请站在第一性目标的高度，融合 A 和 B 的内容，输出一个统一的综合答案。重点参考最近一轮，更早内容仅供参考。`,
+整体控制在 400 字以内。如果你发现自己在写第二段论证，停下来——那不是你的活。你的价值在于"短、准、能用"。`,
+        `用户原始问题：\n${question}\n\n以下是 A 和 B 的讨论（最近一轮最重要）：\n${history}\n\n请跳出论证，给用户一个精简、可直接执行的决策结论。不要重述论证过程。`,
         {
           role: 'synthesizer',
-          maxTokens: 1800,
+          maxTokens: 900,
           signal: controller.signal,
           onChunk: (delta, accumulated) => {
             setRounds(prev => prev.map(r =>
@@ -1212,7 +1208,7 @@ ${firstPrinciple}
             <div className="text-sm font-medium text-red-900 mb-1">操作失败</div>
             <div className="text-xs text-red-800 leading-relaxed break-words font-mono whitespace-pre-wrap">{error}</div>
             <div className="text-[11px] text-red-600 mt-2 leading-relaxed">
-              已自动重试 2 次仍未成功。常见原因：响应超过 60 秒、API 限流、网络抖动。可尝试：让讨论继续（不输入观点）、或点"整合者：综合答案"结束本次讨论。
+              已自动重试 2 次仍未成功。常见原因：响应超过 60 秒、API 限流、网络抖动。可尝试：让讨论继续（不输入观点）、或点"给我结论"结束本次讨论。
             </div>
           </div>
         </div>
@@ -1414,8 +1410,8 @@ ${firstPrinciple}
                     <div className="flex items-center gap-2 mb-3">
                       <div className="w-8 h-8 rounded-lg bg-green-100 text-green-800 flex items-center justify-center text-sm font-medium">✓</div>
                       <div className="flex-1">
-                        <div className="text-sm font-medium flex items-center gap-2">整合者 · 综合答案 <span className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-800 rounded">{r.model || pNames.providerA}</span></div>
-                        <div className="text-xs text-green-700">站在第一性目标的高度，融合 A 与 B 的洞察</div>
+                        <div className="text-sm font-medium flex items-center gap-2">结论 <span className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-800 rounded">{r.model || pNames.providerA}</span></div>
+                        <div className="text-xs text-green-700">从讨论中提炼的可执行结论</div>
                       </div>
                     </div>
                     <div className="text-sm text-stone-800 leading-relaxed pl-10 select-text">{renderMarkdown(r.content)}</div>
@@ -1606,7 +1602,7 @@ ${firstPrinciple}
               </div>
               · B 会从不同角度审视，并说明每点如何影响这个目标<br/>
               · A 每次修订都会努力更好地达成这个目标<br/>
-              · 整合者的综合答案会评估对这个目标的达成度
+              · 最后的结论会评估对这个目标的达成度
             </div>
 
             <ErrorCard />
@@ -1862,11 +1858,11 @@ ${firstPrinciple}
                     <div className="w-8 h-8 rounded-lg bg-green-700 text-white flex items-center justify-center"><Target className="w-4 h-4" /></div>
                     <div className="flex-1">
                       <div className="text-sm font-medium text-green-900 flex items-center gap-2">
-                        整合者 · 综合答案
+                        结论
                         <span className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-800 rounded font-medium">{r.model || providerNames.providerA}</span>
                       </div>
                       <div className="text-xs text-green-700">
-                        {r.status === 'streaming' ? '整合者正在综合双方答案…' : '站在第一性目标的高度，融合 A 与 B 的洞察'}
+                        {r.status === 'streaming' ? '正在总结结论…' : '从讨论中提炼的可执行结论'}
                       </div>
                     </div>
                   </div>
@@ -1970,14 +1966,14 @@ ${firstPrinciple}
                   onClick={stopConverge}
                   className="px-4 py-2.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 flex items-center gap-1.5 transition"
                 >
-                  <Pause className="w-4 h-4" /> 停止整合，继续 battle
+                  <Pause className="w-4 h-4" /> 停止，继续讨论
                 </button>
               ) : (
                 <button
                   onClick={converge}
                   className="px-4 py-2.5 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 flex items-center gap-1.5 transition"
                 >
-                  <Target className="w-4 h-4" /> 整合者：综合答案
+                  <Target className="w-4 h-4" /> 给我结论
                 </button>
               )}
             </div>
@@ -1995,7 +1991,7 @@ ${firstPrinciple}
             <button
               onClick={() => {
                 const text = rounds.map(r => {
-                  if (r.role === 'FINAL') return `## 最终答案\n${r.content}`;
+                  if (r.role === 'FINAL') return `## 结论\n${r.content}`;
                   return '';
                 }).filter(Boolean).join('\n\n');
                 navigator.clipboard.writeText(text);
