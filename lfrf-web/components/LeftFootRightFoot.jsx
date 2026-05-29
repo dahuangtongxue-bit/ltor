@@ -248,7 +248,7 @@ export default function LeftFootRightFoot() {
         else if (r.status === 'failed') lines.push(`## 评审者 B · Round ${r.round}\n（评审失败）\n`);
         else lines.push(`## 评审者 B · Round ${r.round}\n${r.content}\n`);
       }
-      else if (r.role === 'JUDGE') lines.push(`## 我（裁判）· Round ${r.round}\n${r.content}\n`);
+      else if (r.role === 'JUDGE') lines.push(`## 我的观点 · Round ${r.round}\n${r.content}\n`);
       else if (r.role === 'FINAL') lines.push(`## 整合者 · 综合答案\n${r.content}\n`);
     });
     navigator.clipboard.writeText(lines.join('\n'));
@@ -420,7 +420,7 @@ export default function LeftFootRightFoot() {
           const text = await response.text();
           const snippet = text.slice(0, 200).replace(/<[^>]*>/g, '').trim();
           if (response.status === 504 || response.status === 408) {
-            data = { error: { message: `请求超时（HTTP ${response.status}）：单次响应超过 Vercel 60 秒上限。建议减少对话轮次，或在裁判意见中要求 AI 更精炼。` } };
+            data = { error: { message: `请求超时（HTTP ${response.status}）：单次响应超过 Vercel 60 秒上限。建议减少对话轮次，或在补充观点时要求 AI 更精炼。` } };
           } else if (response.status === 502 || response.status === 503) {
             data = { error: { message: `Vercel 服务暂时不可用（HTTP ${response.status}）。请稍后重试。` } };
           } else {
@@ -1099,7 +1099,7 @@ ${firstPrinciple}
             <div className="text-sm font-medium text-red-900 mb-1">操作失败</div>
             <div className="text-xs text-red-800 leading-relaxed break-words font-mono whitespace-pre-wrap">{error}</div>
             <div className="text-[11px] text-red-600 mt-2 leading-relaxed">
-              已自动重试 2 次仍未成功。常见原因：响应超过 60 秒、API 限流、网络抖动。可尝试：让讨论继续（不输入裁判意见）、或点"整合者：综合答案"结束本次讨论。
+              已自动重试 2 次仍未成功。常见原因：响应超过 60 秒、API 限流、网络抖动。可尝试：让讨论继续（不输入观点）、或点"整合者：综合答案"结束本次讨论。
             </div>
           </div>
         </div>
@@ -1182,7 +1182,7 @@ ${firstPrinciple}
               <h1 className="text-2xl font-medium text-stone-900">左脚踩右脚</h1>
               <div className="w-10 h-10 rounded-lg bg-orange-100 text-orange-800 flex items-center justify-center font-medium text-lg">R</div>
             </div>
-            <p className="text-stone-600 text-sm">两个 AI 讨论博弈，给你更靠谱的答案</p>
+            <p className="text-stone-600 text-sm">两个 AI 讨论博弈，帮你把问题想透</p>
           </div>
           <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-sm">
             <label className="block text-sm font-medium text-stone-700 mb-2 flex items-center gap-1.5">
@@ -1239,7 +1239,7 @@ ${firstPrinciple}
           {history.length === 0 ? (
             <div className="bg-white rounded-2xl border border-stone-200 p-12 text-center text-stone-400 text-sm">
               还没有历史记录<br />
-              <span className="text-xs">完成一次完整的对抗后，会自动保存在这里</span>
+              <span className="text-xs">完成一次完整的分析后，会自动保存在这里</span>
             </div>
           ) : (
             <div className="space-y-2">
@@ -1311,7 +1311,7 @@ ${firstPrinciple}
             <div className="text-base font-medium text-stone-900">{entry.question}</div>
           </div>
 
-          {/* 对抗内容（只读复用 renderMarkdown / renderCritique） */}
+          {/* 讨论内容（只读复用 renderMarkdown / renderCritique） */}
           <div className="bg-white border-x border-b border-stone-200 rounded-b-xl overflow-hidden">
             {(entry.rounds || []).map((r, idx) => {
               const pNames = entry.providerNames || providerNames;
@@ -1355,7 +1355,7 @@ ${firstPrinciple}
                   <div key={idx} className="border-b border-stone-100 px-5 py-4 bg-stone-50">
                     <div className="flex items-center gap-2 mb-2">
                       <Gavel className="w-4 h-4 text-stone-600" />
-                      <span className="text-sm font-medium text-stone-700">你的裁判介入</span>
+                      <span className="text-sm font-medium text-stone-700">你的观点</span>
                     </div>
                     <div className="text-sm text-stone-700 pl-6 select-text whitespace-pre-wrap">{r.content}</div>
                   </div>
@@ -1401,7 +1401,6 @@ ${firstPrinciple}
               <h1 className="text-2xl font-medium text-stone-900">左脚踩右脚</h1>
               <div className="w-10 h-10 rounded-lg bg-orange-100 text-orange-800 flex items-center justify-center font-medium text-lg">R</div>
             </div>
-            <p className="text-stone-600 text-sm">两个 AI 讨论博弈，给你更靠谱的答案</p>
             {history.length > 0 && (
               <button
                 onClick={() => setShowHistory(true)}
@@ -1426,11 +1425,11 @@ ${firstPrinciple}
                 <div className="text-xs text-blue-500">Word / Excel / PDF / 文本</div>
               </div>
             )}
-            <label className="block text-sm font-medium text-stone-700 mb-2">提出你的问题，咱们一起分析</label>
+            <label className="block text-sm font-medium text-stone-700 mb-2">两个 AI 讨论博弈，帮你把问题想透</label>
             <textarea
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
-              placeholder="比如：复杂决策、技术选型、投资判断、深度分析……"
+              placeholder="据说左脚踩右脚可以上天……"
               className="w-full p-4 border border-stone-200 rounded-xl text-sm resize-none focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
               rows={4}
             />
@@ -1489,7 +1488,7 @@ ${firstPrinciple}
                 <span className="px-2 py-1 bg-orange-100 text-orange-800 rounded font-medium">评审 B</span>
                 <span className="text-stone-500">{providerNames.providerB} · 独立评级</span>
               </div>
-              <div className="text-stone-400 pt-1 border-t border-stone-100">A+ / A / B / C 四档评级 · 你随时可作为裁判介入</div>
+              <div className="text-stone-400 pt-1 border-t border-stone-100">A+ / A / B / C 四档评级 · 你可以随时参与讨论</div>
               {remaining !== null && (
                 <div className="text-stone-500 pt-1">你今天还剩 <span className="font-medium text-stone-700">{remaining}</span> 次调用</div>
               )}
@@ -1523,7 +1522,7 @@ ${firstPrinciple}
               <span>第一性目标 · 锚定整场讨论</span>
             </div>
             <h2 className="text-lg font-medium text-stone-900">你真正想解决的核心目标</h2>
-            <p className="text-xs text-stone-500 mt-1">B 的所有批评和 A 的所有修订都会围绕它收敛 — 请确认或修改</p>
+            <p className="text-xs text-stone-500 mt-1">整场讨论都会围绕它展开 — 请确认或修改</p>
           </div>
 
           <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-sm">
@@ -1564,8 +1563,8 @@ ${firstPrinciple}
                 <Sparkles className="w-3 h-3" />
                 这个目标会被怎么用？
               </div>
-              · B 可以发散思考，但每条批评结尾都要说明它如何影响这个目标<br/>
-              · A 修订时必须证明新版本"更好地达成这个目标"<br/>
+              · B 会从不同角度审视，并说明每点如何影响这个目标<br/>
+              · A 每次修订都会努力更好地达成这个目标<br/>
               · 整合者的综合答案会评估对这个目标的达成度
             </div>
 
@@ -1734,7 +1733,7 @@ ${firstPrinciple}
                       <span className="font-medium">
                         {r.model || providerNames.providerB}
                         {rating && <span className={`ml-1.5 px-1.5 py-0.5 rounded ${style.tag} text-[10px] font-semibold`}>{rating}</span>}
-                        <span className="ml-1.5">已给出审视意见</span>
+                        <span className="ml-1.5">已给出意见</span>
                       </span>
                       <ChevronRight className={`w-3.5 h-3.5 ${style.subText} group-hover:translate-x-0.5 transition`} />
                       <span className="opacity-30">···</span>
@@ -1745,7 +1744,7 @@ ${firstPrinciple}
 
               // done 展开（默认）：完整卡片，附带折叠按钮
               return (
-                <div key={idx} data-source-label={`B 的 Round ${r.round} 审查`} className={`border-b border-stone-100 p-5 ${style.cardBg}`}>
+                <div key={idx} data-source-label={`B 的 Round ${r.round} 意见`} className={`border-b border-stone-100 p-5 ${style.cardBg}`}>
                   <div className="flex items-center gap-2 mb-3">
                     <div className={`w-8 h-8 rounded-lg ${style.dotBg} ${style.dotText} flex items-center justify-center text-sm font-medium`}>B</div>
                     <div className="flex-1">
@@ -1769,11 +1768,11 @@ ${firstPrinciple}
             }
             if (r.role === 'JUDGE') {
               return (
-                <div key={idx} data-source-label={`我之前的裁判意见`} className="border-b border-stone-100 p-5 bg-blue-50">
+                <div key={idx} data-source-label={`我之前的观点`} className="border-b border-stone-100 p-5 bg-blue-50">
                   <div className="flex items-center gap-2 mb-3">
                     <div className="w-8 h-8 rounded-lg bg-blue-700 text-white flex items-center justify-center text-sm font-medium">我</div>
                     <div className="flex-1">
-                      <div className="text-sm font-medium text-blue-900 flex items-center gap-1.5"><Gavel className="w-3.5 h-3.5" /> 裁判介入</div>
+                      <div className="text-sm font-medium text-blue-900 flex items-center gap-1.5"><Gavel className="w-3.5 h-3.5" /> 我的观点</div>
                       <div className="text-xs text-blue-700">用户作为最终决策者</div>
                     </div>
                   </div>
@@ -1831,11 +1830,11 @@ ${firstPrinciple}
               }}
             >
               <Quote className="w-3 h-3" />
-              引用到裁判意见
+              引用到我的观点
             </button>
           )}
 
-          {/* B 已给出审查意见的浮动提示（像微信"新消息"那样） */}
+          {/* B 已给出意见的浮动提示（像微信"新消息"那样） */}
           {newBToast && (
             <button
               onClick={() => {
@@ -1865,7 +1864,7 @@ ${firstPrinciple}
                 {newBToast.rating && (
                   <span className="ml-1.5 px-1.5 py-0.5 bg-white/25 rounded text-[10px] font-bold">{newBToast.rating}</span>
                 )}
-                <span className="ml-1.5">已给出审视意见</span>
+                <span className="ml-1.5">已给出意见</span>
               </span>
               <ChevronDown className="w-3.5 h-3.5" />
             </button>
@@ -1879,7 +1878,7 @@ ${firstPrinciple}
               ref={judgeInputRef}
               value={judgeInput}
               onChange={(e) => setJudgeInput(e.target.value)}
-              placeholder="作为裁判，补充信息、表态、或指定下一轮重点……（在上方划选文字可直接引用）"
+              placeholder="说说你的看法，或指定下一轮想深入的方向……（在上方划选文字可直接引用）"
               className="w-full p-3 border border-stone-200 rounded-lg text-sm resize-none focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 mb-3 whitespace-pre-wrap"
               rows={3}
             />
@@ -1889,7 +1888,7 @@ ${firstPrinciple}
                 disabled={converging}
                 className="flex-1 bg-stone-900 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-stone-800 flex items-center justify-center gap-2 transition disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {judgeInput.trim() ? <><Send className="w-4 h-4" /> 提交裁判意见并继续下一轮</> : <><ChevronRight className="w-4 h-4" /> 让它们继续下一轮</>}
+                {judgeInput.trim() ? <><Send className="w-4 h-4" /> 提交我的观点，继续下一轮</> : <><ChevronRight className="w-4 h-4" /> 让它们继续下一轮</>}
               </button>
               {converging ? (
                 <button
