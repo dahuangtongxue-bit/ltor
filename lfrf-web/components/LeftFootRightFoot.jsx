@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Pause, SkipForward, Target, Sparkles, AlertTriangle, Eye, FileSearch, Gavel, RotateCw, ChevronRight, ChevronDown, Loader2, Copy, Check, Quote, Lock, Paperclip, X, FileText } from 'lucide-react';
+import { Send, Pause, SkipForward, Target, Sparkles, AlertTriangle, Eye, FileSearch, Gavel, RotateCw, ChevronRight, ChevronDown, Loader2, Copy, Check, Quote, Lock, Paperclip, X, FileText, History, Clock, Trash2, ArrowLeft } from 'lucide-react';
 import { parseFile, describeParseError, MAX_CHARS } from '../lib/parseFile';
+import { loadHistory, saveHistoryEntry, deleteHistoryEntry, clearHistory, formatTime } from '../lib/history';
 
 export default function LeftFootRightFoot() {
   const [password, setPassword] = useState('');
@@ -23,6 +24,11 @@ export default function LeftFootRightFoot() {
   const [lastFailedAction, setLastFailedAction] = useState(null); // function to retry
   const [newBToast, setNewBToast] = useState(null); // {roundNum, modelName, ts} — B 跑完后右下角浮动提示
   const [converging, setConverging] = useState(false); // 是否正在整合（用于按钮变"停止整合"）
+  // 本地历史记录（localStorage）
+  const [history, setHistory] = useState([]); // 历史列表
+  const [showHistory, setShowHistory] = useState(false); // 是否在看历史面板
+  const [viewingEntry, setViewingEntry] = useState(null); // 正在查看的某条历史（只读）
+  const savedThisRunRef = useRef(false); // 防止同一轮重复保存
   // 上传的背景文档：{ name, text, truncated, charCount, kind } | null
   const [doc, setDoc] = useState(null);
   const [docParsing, setDocParsing] = useState(false); // 文件解析中
@@ -77,6 +83,11 @@ export default function LeftFootRightFoot() {
         setAuthed(true);
       }
     }
+  }, []);
+
+  // 启动时加载本地历史
+  useEffect(() => {
+    setHistory(loadHistory());
   }, []);
 
   // 拉取两个 provider 的显示名
@@ -982,14 +993,21 @@ ${firstPrinciple}
       );
 
       // FINAL 完成：清掉 streaming 状态
-      setRounds(prev => prev.map(r =>
-        (r.role === 'FINAL' && r.status === 'streaming')
-          ? { ...r, content: finalResult.text, model: finalResult.modelName || r.model, status: undefined }
-          : r
-      ));
+      let finalRoundsSnapshot = null;
+      setRounds(prev => {
+        const next = prev.map(r =>
+          (r.role === 'FINAL' && r.status === 'streaming')
+            ? { ...r, content: finalResult.text, model: finalResult.modelName || r.model, status: undefined }
+            : r
+        );
+        finalRoundsSnapshot = next;
+        return next;
+      });
       setStage('done');
       setConverging(false);
       convergeAbortRef.current = null;
+      // 存入本地历史
+      persistCurrentRun(finalRoundsSnapshot);
     } catch (e) {
       // 用户主动中止：丢弃半截 FINAL，回到可继续 battle 的状态，不报错
       if (e.name === 'AbortError' || controller.signal.aborted) {
@@ -1018,6 +1036,43 @@ ${firstPrinciple}
     }
   };
 
+  // 把当前这轮对抗存进本地历史（整合完成时调用）
+  const persistCurrentRun = (finalRounds) => {
+    if (savedThisRunRef.current) return; // 同一轮只存一次
+    const roundsToSave = finalRounds || rounds;
+    if (!roundsToSave || roundsToSave.length === 0) return;
+    const rec = saveHistoryEntry({
+      question,
+      firstPrinciple,
+      rounds: roundsToSave,
+      docName: doc ? doc.name : null,
+      providerNames,
+    });
+    if (rec) {
+      savedThisRunRef.current = true;
+      setHistory(loadHistory());
+    }
+  };
+
+  // 打开某条历史（只读查看）
+  const openHistoryEntry = (entry) => {
+    setViewingEntry(entry);
+    setShowHistory(false);
+  };
+
+  // 删除某条历史
+  const handleDeleteHistory = (id, e) => {
+    if (e) e.stopPropagation();
+    deleteHistoryEntry(id);
+    setHistory(loadHistory());
+  };
+
+  // 清空全部历史
+  const handleClearHistory = () => {
+    clearHistory();
+    setHistory([]);
+  };
+
   const reset = () => {
     setStage('input');
     setRounds([]);
@@ -1029,6 +1084,7 @@ ${firstPrinciple}
     setCurrentStep('');
     setLastFailedAction(null);
     setDoc(null);
+    savedThisRunRef.current = false; // 新一轮开始，重置保存标记
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -1155,6 +1211,185 @@ ${firstPrinciple}
     );
   }
 
+  // === 历史记录面板 ===
+  if (showHistory) {
+    return (
+      <div className="min-h-screen bg-stone-50 flex items-start justify-center p-6">
+        <div className="max-w-2xl w-full">
+          <div className="flex items-center justify-between mb-6 pt-4">
+            <button
+              onClick={() => setShowHistory(false)}
+              className="flex items-center gap-1.5 text-sm text-stone-600 hover:text-stone-900 transition"
+            >
+              <ArrowLeft className="w-4 h-4" /> 返回
+            </button>
+            <h2 className="text-lg font-medium text-stone-900 flex items-center gap-2">
+              <History className="w-5 h-5 text-stone-500" /> 历史记录
+            </h2>
+            {history.length > 0 ? (
+              <button
+                onClick={handleClearHistory}
+                className="text-xs text-stone-400 hover:text-red-600 transition"
+              >
+                清空
+              </button>
+            ) : <span className="w-8" />}
+          </div>
+
+          {history.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-stone-200 p-12 text-center text-stone-400 text-sm">
+              还没有历史记录<br />
+              <span className="text-xs">完成一次完整的对抗后，会自动保存在这里</span>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {history.map(entry => (
+                <button
+                  key={entry.id}
+                  onClick={() => openHistoryEntry(entry)}
+                  className="w-full text-left bg-white rounded-xl border border-stone-200 p-4 hover:border-blue-300 hover:shadow-sm transition group"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-stone-800 line-clamp-2">{entry.question || '(无问题)'}</div>
+                      {entry.firstPrinciple && (
+                        <div className="text-xs text-stone-500 mt-1 line-clamp-1">🎯 {entry.firstPrinciple}</div>
+                      )}
+                      <div className="flex items-center gap-2 mt-2 text-xs text-stone-400">
+                        <Clock className="w-3 h-3" /> {formatTime(entry.createdAt)}
+                        {entry.docName && <><span>·</span><FileText className="w-3 h-3" /> {entry.docName}</>}
+                      </div>
+                    </div>
+                    <span
+                      onClick={(e) => handleDeleteHistory(entry.id, e)}
+                      className="shrink-0 text-stone-300 hover:text-red-600 p-1 rounded hover:bg-stone-50 transition opacity-0 group-hover:opacity-100 cursor-pointer"
+                      title="删除"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // === 只读查看某条历史 ===
+  if (viewingEntry) {
+    const entry = viewingEntry;
+    return (
+      <div className="min-h-screen bg-stone-50 flex justify-center p-6">
+        <div className="max-w-3xl w-full">
+          <div className="flex items-center justify-between mb-4 pt-2">
+            <button
+              onClick={() => { setViewingEntry(null); setShowHistory(true); }}
+              className="flex items-center gap-1.5 text-sm text-stone-600 hover:text-stone-900 transition"
+            >
+              <ArrowLeft className="w-4 h-4" /> 返回历史
+            </button>
+            <span className="text-xs text-stone-400 flex items-center gap-1.5">
+              <Clock className="w-3 h-3" /> {formatTime(entry.createdAt)}
+            </span>
+          </div>
+
+          {/* 第一性目标 */}
+          {entry.firstPrinciple && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-3">
+              <div className="text-xs text-amber-700 font-medium mb-1 flex items-center gap-1.5">
+                <Target className="w-3.5 h-3.5" /> 第一性目标
+              </div>
+              <div className="text-sm text-stone-800">{entry.firstPrinciple}</div>
+            </div>
+          )}
+
+          {/* 问题 */}
+          <div className="bg-white rounded-t-xl border border-stone-200 p-5">
+            <div className="text-xs text-stone-500 mb-1">问题{entry.docName ? ` · 附带文档：${entry.docName}` : ''}</div>
+            <div className="text-base font-medium text-stone-900">{entry.question}</div>
+          </div>
+
+          {/* 对抗内容（只读复用 renderMarkdown / renderCritique） */}
+          <div className="bg-white border-x border-b border-stone-200 rounded-b-xl overflow-hidden">
+            {(entry.rounds || []).map((r, idx) => {
+              const pNames = entry.providerNames || providerNames;
+              if (r.role === 'A') {
+                return (
+                  <div key={idx} className="border-b border-stone-100 p-5">
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-800 flex items-center justify-center text-sm font-medium">A</div>
+                      <div className="flex-1">
+                        <div className="text-sm font-medium">主答 A <span className="text-[10px] px-1.5 py-0.5 bg-purple-50 text-purple-700 rounded">{r.model || pNames.providerA}</span></div>
+                        <div className="text-xs text-stone-500">Round {r.round} · {r.version}</div>
+                      </div>
+                    </div>
+                    <div className="text-sm text-stone-700 leading-relaxed pl-10 select-text">{renderMarkdown(r.content)}</div>
+                  </div>
+                );
+              }
+              if (r.role === 'B') {
+                if (r.status === 'pending' || r.status === 'failed') return null;
+                const rating = parseRating(r.content);
+                const style = (rating && ratingStyles[rating]) || defaultBStyle;
+                return (
+                  <div key={idx} className={`border-b border-stone-100 p-5 ${style.cardBg}`}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className={`w-8 h-8 rounded-lg ${style.dotBg} ${style.dotText} flex items-center justify-center text-sm font-medium`}>B</div>
+                      <div className="flex-1">
+                        <div className="text-sm font-medium flex items-center gap-2">
+                          独立评审 B
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${style.tag}`}>{r.model || pNames.providerB}</span>
+                          {rating && <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${style.tag}`}>评级 {rating}</span>}
+                        </div>
+                        <div className={`text-xs ${style.subText}`}>Round {r.round}</div>
+                      </div>
+                    </div>
+                    <div className="text-sm text-stone-700 leading-relaxed pl-10 select-text">{renderCritique(r.content)}</div>
+                  </div>
+                );
+              }
+              if (r.role === 'JUDGE') {
+                return (
+                  <div key={idx} className="border-b border-stone-100 px-5 py-4 bg-stone-50">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Gavel className="w-4 h-4 text-stone-600" />
+                      <span className="text-sm font-medium text-stone-700">你的裁判介入</span>
+                    </div>
+                    <div className="text-sm text-stone-700 pl-6 select-text whitespace-pre-wrap">{r.content}</div>
+                  </div>
+                );
+              }
+              if (r.role === 'FINAL') {
+                return (
+                  <div key={idx} className="border-b border-stone-100 p-5 bg-gradient-to-b from-green-50/50 to-white">
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="w-8 h-8 rounded-lg bg-green-100 text-green-800 flex items-center justify-center text-sm font-medium">✓</div>
+                      <div className="flex-1">
+                        <div className="text-sm font-medium flex items-center gap-2">整合者 · 综合答案 <span className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-800 rounded">{r.model || pNames.providerA}</span></div>
+                        <div className="text-xs text-green-700">站在第一性目标的高度，融合 A 与 B 的洞察</div>
+                      </div>
+                    </div>
+                    <div className="text-sm text-stone-800 leading-relaxed pl-10 select-text">{renderMarkdown(r.content)}</div>
+                  </div>
+                );
+              }
+              return null;
+            })}
+          </div>
+
+          <button
+            onClick={() => { setViewingEntry(null); reset(); }}
+            className="mt-4 w-full bg-stone-900 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-stone-800 flex items-center justify-center gap-2 transition"
+          >
+            <Sparkles className="w-4 h-4" /> 开始新的提问
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // === 输入页 ===
   if (stage === 'input') {
     return (
@@ -1167,6 +1402,14 @@ ${firstPrinciple}
               <div className="w-10 h-10 rounded-lg bg-orange-100 text-orange-800 flex items-center justify-center font-medium text-lg">R</div>
             </div>
             <p className="text-stone-600 text-sm">两个 AI 讨论博弈，给你更靠谱的答案</p>
+            {history.length > 0 && (
+              <button
+                onClick={() => setShowHistory(true)}
+                className="mt-3 inline-flex items-center gap-1.5 text-xs text-stone-500 hover:text-blue-600 border border-stone-200 hover:border-blue-300 rounded-full px-3 py-1.5 transition"
+              >
+                <History className="w-3.5 h-3.5" /> 历史记录（{history.length}）
+              </button>
+            )}
           </div>
 
           <div
