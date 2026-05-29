@@ -1468,7 +1468,7 @@ ${firstPrinciple}
                   className="w-full flex items-center justify-center gap-2 py-2.5 border border-dashed border-stone-300 rounded-lg text-xs text-stone-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/40 transition"
                 >
                   <Paperclip className="w-3.5 h-3.5" />
-                  上传或拖入背景资料（可选）· Word / Excel / PDF / 文本
+                  上传或拖入资料：Word / Excel / PDF / TXT
                 </button>
               )}
               {docParsing && (
